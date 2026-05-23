@@ -2,48 +2,89 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Illuminate\Notifications\Notifiable;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasFactory;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
     protected $fillable = [
         'name',
-        'email',
-        'password',
+        'telegram_chat_id',
+        'telegram_username',
+        'timezone',
+        'preferred_language',
+        'daily_budget_idr',
+        'daily_calorie_goal',
+        'onboarding_step',
+        'onboarding_complete_at',
+        'last_active_at',
+        'last_summary_sent_at',
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
-    protected $hidden = [
-        'password',
-        'remember_token',
-    ];
+    protected $hidden = [];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
+            'telegram_chat_id' => 'integer',
+            'daily_budget_idr' => 'integer',
+            'daily_calorie_goal' => 'integer',
+            'onboarding_complete_at' => 'datetime',
+            'last_active_at' => 'datetime',
+            'last_summary_sent_at' => 'datetime',
         ];
+    }
+
+    // ── Relationships ──────────────────────────────────────────────────
+
+    public function entries(): HasMany
+    {
+        return $this->hasMany(Entry::class);
+    }
+
+    public function streak(): HasOne
+    {
+        return $this->hasOne(Streak::class);
+    }
+
+    public function reminders(): HasMany
+    {
+        return $this->hasMany(Reminder::class);
+    }
+
+    public function dailySummaries(): HasMany
+    {
+        return $this->hasMany(DailySummary::class);
+    }
+
+    public function aiLogs(): HasMany
+    {
+        return $this->hasMany(AiLog::class);
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+
+    public function isOnboardingComplete(): bool
+    {
+        return $this->onboarding_step === 'complete';
+    }
+
+    /**
+     * Find or create a user by Telegram chat ID.
+     */
+    public static function findOrCreateByTelegramId(int $chatId, ?string $username = null): self
+    {
+        return self::firstOrCreate(
+            ['telegram_chat_id' => $chatId],
+            [
+                'name' => $username ?? 'User',
+                'telegram_username' => $username,
+                'onboarding_step' => 'new',
+            ]
+        );
     }
 }
