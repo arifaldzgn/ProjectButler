@@ -10,55 +10,83 @@ class EntryService
 {
     /**
      * Create a pending entry (not yet confirmed by user).
+     * Handles all v1.2 entry types.
      */
     public function createPendingEntry(User $user, array $parsed, string $rawMessage): Entry
     {
         $now = Carbon::now($user->timezone);
+        $intent = $parsed['intent'];
 
-        // Determine entry_time from parsed data or current time
         $entryTime = $now;
         if (!empty($parsed['entry_time'])) {
             try {
-                $entryTime = Carbon::parse($parsed['entry_time'], $user->timezone);
-                // If only time was given, use today's date
-                if ($entryTime->year < 2000) {
-                    $entryTime = $now->copy()->setTimeFromTimeString($parsed['entry_time']);
-                }
+                $entryTime = $now->copy()->setTimeFromTimeString($parsed['entry_time']);
             } catch (\Exception $e) {
                 $entryTime = $now;
             }
         }
 
+        $metadata = [];
+        if (!empty($parsed['fund_name'])) $metadata['fund_name'] = $parsed['fund_name'];
+        if (!empty($parsed['source_fund'])) $metadata['source_fund'] = $parsed['source_fund'];
+        if (!empty($parsed['target_fund'])) $metadata['target_fund'] = $parsed['target_fund'];
+
         $data = [
             'user_id' => $user->id,
-            'type' => $this->mapIntentToType($parsed['intent']),
+            'type' => $this->mapIntentToType($intent),
             'ai_raw_input' => $rawMessage,
-            'ai_intent' => $parsed['intent'],
+            'ai_intent' => $intent,
             'ai_confidence' => $parsed['confidence'] ?? 0.5,
-            'ai_prompt_version' => 'parse_v1',
+            'ai_prompt_version' => 'parse_v1.3',
             'entry_time' => $entryTime,
-            'confirmed_at' => null, // Pending until user confirms
+            'metadata' => $metadata,
+            'confirmed_at' => null,
         ];
 
-        // Type-specific fields
-        switch ($parsed['intent']) {
-            case 'expense':
+        switch ($intent) {
+            case 'log_expense':
                 $data['amount'] = $parsed['amount'] ?? 0;
                 $data['category'] = $parsed['category'] ?? 'other';
                 $data['merchant'] = $parsed['merchant'] ?? null;
                 $data['note'] = $parsed['note'] ?? null;
                 break;
 
-            case 'meal':
+            case 'log_meal':
                 $data['food_item'] = $parsed['food_item'] ?? 'Unknown food';
                 $data['calories'] = $parsed['calories'] ?? null;
                 $data['is_calorie_estimated'] = $parsed['is_calorie_estimated'] ?? true;
                 $data['note'] = $parsed['note'] ?? null;
                 break;
 
-            case 'saving':
+            case 'log_saving':
                 $data['amount'] = $parsed['amount'] ?? 0;
                 $data['note'] = $parsed['note'] ?? null;
+                break;
+
+            case 'log_income':
+                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['note'] = $parsed['note'] ?? ($parsed['source'] ?? null);
+                break;
+
+            case 'log_bill_payment':
+                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['merchant'] = $parsed['bill_name'] ?? null;
+                $data['note'] = $parsed['bill_name'] ?? null;
+                break;
+
+            case 'log_debt_payment':
+                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['note'] = $parsed['debt_name'] ?? null;
+                break;
+
+            case 'log_sinking_deposit':
+                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['note'] = $parsed['fund_name'] ?? null;
+                break;
+
+            case 'transfer_fund':
+                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['note'] = "Transfer ke " . ($parsed['target_fund'] ?? 'dana lain');
                 break;
         }
 
@@ -79,127 +107,91 @@ class EntryService
      */
     public function cancelEntry(Entry $entry): void
     {
-        $entry->delete(); // Soft delete
+        $entry->delete();
     }
 
-    // ── Query Methods (all scoped to user_id) ──────────────────────────
+    // ── Query Methods ───────────────────────────────────────────────────
 
-    /**
-     * Get today's total spending (confirmed only).
-     */
     public function getTodaySpending(User $user): int
     {
         $today = Carbon::now($user->timezone)->toDateString();
-
         return (int) Entry::forUser($user->id)
-            ->expenses()
-            ->confirmed()
-            ->forDate($today)
-            ->sum('amount');
+            ->whereIn('type', ['expense', 'bill_payment'])
+            ->confirmed()->forDate($today)->sum('amount');
     }
 
-    /**
-     * Get today's total calories (confirmed only).
-     */
     public function getTodayCalories(User $user): int
     {
         $today = Carbon::now($user->timezone)->toDateString();
-
         return (int) Entry::forUser($user->id)
-            ->meals()
-            ->confirmed()
-            ->forDate($today)
-            ->sum('calories');
+            ->meals()->confirmed()->forDate($today)->sum('calories');
     }
 
-    /**
-     * Get this month's total spending.
-     */
+    public function getTodayIncome(User $user): int
+    {
+        $today = Carbon::now($user->timezone)->toDateString();
+        return (int) Entry::forUser($user->id)
+            ->income()->confirmed()->forDate($today)->sum('amount');
+    }
+
+    public function getTodayBillsPaid(User $user): int
+    {
+        $today = Carbon::now($user->timezone)->toDateString();
+        return (int) Entry::forUser($user->id)
+            ->billPayments()->confirmed()->forDate($today)->sum('amount');
+    }
+
     public function getMonthSpending(User $user): int
     {
         $now = Carbon::now($user->timezone);
-
         return (int) Entry::forUser($user->id)
-            ->expenses()
-            ->confirmed()
-            ->forMonth($now->year, $now->month)
-            ->sum('amount');
+            ->expenses()->confirmed()->forMonth($now->year, $now->month)->sum('amount');
     }
 
-    /**
-     * Get budget remaining for today.
-     */
+    public function getMonthIncome(User $user): int
+    {
+        $now = Carbon::now($user->timezone);
+        return (int) Entry::forUser($user->id)
+            ->income()->confirmed()->forMonth($now->year, $now->month)->sum('amount');
+    }
+
     public function getBudgetRemaining(User $user): ?int
     {
         if (!$user->daily_budget_idr) {
             return null;
         }
-
-        $todaySpent = $this->getTodaySpending($user);
-        return $user->daily_budget_idr - $todaySpent;
+        return $user->daily_budget_idr - $this->getTodaySpending($user);
     }
 
-    /**
-     * Get total savings (all time, confirmed only).
-     */
     public function getTotalSavings(User $user): int
     {
         return (int) Entry::forUser($user->id)
-            ->savings()
-            ->confirmed()
-            ->sum('amount');
+            ->savings()->confirmed()->sum('amount');
     }
 
-    /**
-     * Get today's confirmed entries.
-     */
     public function getTodayEntries(User $user): \Illuminate\Database\Eloquent\Collection
     {
         $today = Carbon::now($user->timezone)->toDateString();
-
-        return Entry::forUser($user->id)
-            ->confirmed()
-            ->forDate($today)
-            ->orderBy('entry_time')
-            ->get();
+        return Entry::forUser($user->id)->confirmed()->forDate($today)->orderBy('entry_time')->get();
     }
 
-    /**
-     * Get today's entry count.
-     */
     public function getTodayEntryCount(User $user): int
     {
         $today = Carbon::now($user->timezone)->toDateString();
-
-        return Entry::forUser($user->id)
-            ->confirmed()
-            ->forDate($today)
-            ->count();
+        return Entry::forUser($user->id)->confirmed()->forDate($today)->count();
     }
 
-    /**
-     * Get total savings for this month.
-     */
-    public function getMonthSavings(User $user): int
-    {
-        $now = Carbon::now($user->timezone);
-
-        return (int) Entry::forUser($user->id)
-            ->savings()
-            ->confirmed()
-            ->forMonth($now->year, $now->month)
-            ->sum('amount');
-    }
-
-    /**
-     * Map AI intent to entry type.
-     */
     private function mapIntentToType(string $intent): string
     {
         return match ($intent) {
-            'expense' => 'expense',
-            'meal' => 'meal',
-            'saving' => 'saving',
+            'log_expense' => 'expense',
+            'log_meal' => 'meal',
+            'log_saving' => 'saving',
+            'log_income' => 'income',
+            'log_bill_payment' => 'bill_payment',
+            'log_debt_payment' => 'debt_payment',
+            'log_sinking_deposit' => 'sinking_fund_deposit',
+            'transfer_fund' => 'transfer',
             default => 'expense',
         };
     }

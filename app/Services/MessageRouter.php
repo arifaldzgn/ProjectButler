@@ -3,8 +3,13 @@
 namespace App\Services;
 
 use App\Models\Entry;
+use App\Models\Fund;
 use App\Models\User;
+use App\Jobs\UpdateBehavioralMemory;
+use App\Services\BehavioralMemoryService;
+use App\Services\PolicyEngine;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class MessageRouter
 {
@@ -14,6 +19,11 @@ class MessageRouter
     private AiLogService $aiLog;
     private OnboardingService $onboarding;
     private TelegramService $telegram;
+    private FundService $funds;
+    private BillService $bills;
+    private DebtService $debts;
+    private PolicyEngine $policy;
+    private BehavioralMemoryService $memory;
 
     public function __construct(
         AIService $ai,
@@ -21,25 +31,28 @@ class MessageRouter
         StreakService $streaks,
         AiLogService $aiLog,
         OnboardingService $onboarding,
-        TelegramService $telegram
+        TelegramService $telegram,
+        FundService $funds,
+        BillService $bills,
+        DebtService $debts,
+        PolicyEngine $policy,
+        BehavioralMemoryService $memory
     ) {
-        $this->ai = $ai;
-        $this->entries = $entries;
-        $this->streaks = $streaks;
-        $this->aiLog = $aiLog;
+        $this->ai        = $ai;
+        $this->entries   = $entries;
+        $this->streaks   = $streaks;
+        $this->aiLog     = $aiLog;
         $this->onboarding = $onboarding;
-        $this->telegram = $telegram;
+        $this->telegram  = $telegram;
+        $this->funds     = $funds;
+        $this->bills     = $bills;
+        $this->debts     = $debts;
+        $this->policy    = $policy;
+        $this->memory    = $memory;
     }
 
     /**
      * Process an incoming Telegram text message.
-     *
-     * Flow:
-     * 1. Check onboarding gate
-     * 2. Handle quick commands (/start, /summary)
-     * 3. AI parse with Prompt A
-     * 4. Confidence-based routing
-     * 5. Create pending entry → send inline keyboard
      */
     public function handle(User $user, string $chatId, string $message): void
     {
@@ -49,14 +62,14 @@ class MessageRouter
             return;
         }
 
-        // ── Gate 2: Quick commands (no AI needed) ──────────────────────
+        // ── Gate 2: Quick commands ──────────────────────────────────────
         if ($this->handleQuickCommand($user, $chatId, $message)) {
             return;
         }
 
-        // ── Gate 3: AI parse ───────────────────────────────────────────
+        // ── Gate 3: AI parse ────────────────────────────────────────────
+        $startTime = microtime(true);
         try {
-            $startTime = microtime(true);
             $parsed = $this->ai->parseMessage($message, $user->name);
             $latencyMs = $parsed['_latency_ms'] ?? (int) ((microtime(true) - $startTime) * 1000);
 
@@ -65,42 +78,91 @@ class MessageRouter
                 return;
             }
 
-            // Log the AI call
             $this->aiLog->logParseCall($user, $message, $parsed, $latencyMs);
 
         } catch (\Exception $e) {
-            $latencyMs = (int) ((microtime(true) - ($startTime ?? microtime(true))) * 1000);
+            $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
             $this->aiLog->logParseCall($user, $message, null, $latencyMs, false, $e->getMessage());
 
-            $errorMsg = config('app.debug')
-                ? $this->telegram->getParseErrorResponse() . "\n\n[Debug] " . substr($e->getMessage(), 0, 500)
+            $errMsg = config('app.debug')
+                ? $this->telegram->getParseErrorResponse() . "\n\n[Debug] " . substr($e->getMessage(), 0, 300)
                 : $this->telegram->getParseErrorResponse();
 
-            $this->telegram->sendMessage($chatId, $errorMsg);
+            $this->telegram->sendMessage($chatId, $errMsg);
             return;
         }
 
-        // ── Gate 4: Route by intent ────────────────────────────────────
-        $intent = $parsed['intent'] ?? 'general';
+        // ── Gate 4: Route by intent ─────────────────────────────────────
+        $intent = $parsed['intent'] ?? 'unknown';
         $confidence = (float) ($parsed['confidence'] ?? 0.5);
 
+        if (config('app.debug')) {
+            $confStr = number_format($confidence, 2);
+            $latency = $parsed['_latency_ms'] ?? $latencyMs;
+            $debugMsg = "🤖 *AI Debug*\nIntent: `{$intent}`\nConf: `{$confStr}`\nLatency: `{$latency}ms`";
+            $this->telegram->setDebugContext($debugMsg);
+        }
+
+        // Loggable entry intents (including dual log)
+        $logIntents = ['log_expense', 'log_meal', 'log_saving', 'log_income',
+                       'log_bill_payment', 'log_debt_payment', 'log_sinking_deposit',
+                       'log_meal_and_expense'];
+
+        if (in_array($intent, $logIntents)) {
+            $this->handleEntry($user, $chatId, $message, $parsed, $confidence);
+            return;
+        }
+
         match ($intent) {
-            'expense', 'meal', 'saving' => $this->handleEntry($user, $chatId, $message, $parsed, $confidence),
-            'query' => $this->handleQuery($user, $chatId, $parsed),
-            'general' => $this->handleGeneral($user, $chatId, $message, $parsed),
-            default => $this->telegram->sendMessage($chatId, $parsed['message'] ?? '🤔 Butler belum ngerti nih...'),
+            'add_bill' => $this->handleAddBill($user, $chatId, $parsed),
+            'add_sinking_fund' => $this->handleAddSinkingFund($user, $chatId, $parsed),
+            'query_balance' => $this->handleQueryBalance($user, $chatId, $parsed),
+            'query_summary' => $this->sendQuickSummary($user, $chatId),
+            'query_spending' => $this->handleQuerySpending($user, $chatId, $parsed),
+            'set_reminder' => $this->handleSetReminder($user, $chatId, $parsed),
+            'unknown' => $this->telegram->sendMessage($chatId, $parsed['message'] ?? $this->telegram->getLowConfidenceResponse()),
+            default   => $this->telegram->sendMessage($chatId, $this->ai->chat($message)),
         };
     }
 
+
     /**
-     * Handle a Telegram callback query (inline keyboard button press).
-     *
-     * Callback data format: "action:entryId"
-     * Actions: confirm, edit, cancel
+     * Handle callback query (inline keyboard button press).
      */
     public function handleCallbackQuery(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
     {
-        $parts = explode(':', $data, 2);
+        // ── Onboarding callbacks ────────────────────────────────────────
+        if (str_starts_with($data, 'onboard:')) {
+            $this->handleOnboardingCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── Fund source selection callbacks ─────────────────────────────
+        if (str_starts_with($data, 'fund_src:')) {
+            $this->handleFundSourceCallback($user, $chatId, $callbackQueryId, $data);
+            return;
+        }
+
+        // ── v2.1: Account selection (needs_clarification mode) ──────────
+        if (str_starts_with($data, 'acct_sel:')) {
+            $this->handleAccountSelectionCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── v2.1: Undo callback ──────────────────────────────────────────
+        if (str_starts_with($data, 'undo:')) {
+            $this->handleUndoCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── v2.1: Behavioral memory consent ─────────────────────────────
+        if (str_starts_with($data, 'consent_yes:') || str_starts_with($data, 'consent_no:')) {
+            $this->handleConsentCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── Entry confirmation callbacks ────────────────────────────────
+        $parts  = explode(':', $data, 2);
         $action = $parts[0] ?? '';
         $entryId = (int) ($parts[1] ?? 0);
 
@@ -109,7 +171,6 @@ class MessageRouter
             return;
         }
 
-        // Find the entry — must belong to this user and be pending
         $entry = Entry::forUser($user->id)->pending()->find($entryId);
 
         if (!$entry) {
@@ -120,10 +181,59 @@ class MessageRouter
 
         match ($action) {
             'confirm' => $this->confirmEntry($user, $chatId, $callbackQueryId, $entry, $messageId),
-            'edit' => $this->editEntry($user, $chatId, $callbackQueryId, $entry, $messageId),
-            'cancel' => $this->cancelEntry($user, $chatId, $callbackQueryId, $entry, $messageId),
-            default => $this->telegram->answerCallbackQuery($callbackQueryId, 'Aksi tidak dikenal.'),
+            'edit'    => $this->editEntry($chatId, $callbackQueryId, $entry, $messageId),
+            'cancel'  => $this->cancelEntry($chatId, $callbackQueryId, $entry, $messageId),
+            default   => $this->telegram->answerCallbackQuery($callbackQueryId, 'Aksi tidak dikenal.'),
         };
+    }
+
+    /**
+     * Handle "from which fund?" selection callback.
+     */
+    private function handleFundSourceCallback(User $user, string $chatId, string $callbackQueryId, string $data): void
+    {
+        // fund_src:{entryId}:{fundId|daily|skip}
+        $parts = explode(':', $data);
+        $entryId = (int) ($parts[1] ?? 0);
+        $fundTarget = $parts[2] ?? 'skip';
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        if ($fundTarget === 'skip' || $fundTarget === 'daily') {
+            // No fund assignment — just confirm the entry normally
+            $entry = Entry::forUser($user->id)->pending()->find($entryId);
+            if ($entry) {
+                $this->entries->confirmEntry($entry);
+                $this->streaks->updateAfterConfirmation($user, $entry->type);
+                $this->applyBillDebtEffect($user, $entry);
+                $spent = $this->entries->getTodaySpending($user);
+                $remaining = $this->entries->getBudgetRemaining($user);
+                $parsed = $this->entryToParsedArray($entry);
+                $msg = $this->telegram->formatConfirmedMessage($entry->type, $parsed, $spent, $remaining);
+                $this->telegram->sendMessage($chatId, $msg);
+            }
+            return;
+        }
+
+        // Assign to a specific fund
+        $fundId = (int) $fundTarget;
+        $fund = \App\Models\Fund::forUser($user->id)->find($fundId);
+        $entry = Entry::forUser($user->id)->pending()->find($entryId);
+
+        if (!$entry || !$fund) {
+            $this->telegram->sendMessage($chatId, 'Entry atau dana tidak ditemukan.');
+            return;
+        }
+
+        $entry->update(['source_fund_id' => $fund->id, 'source_fund_confirmed' => true]);
+        $this->entries->confirmEntry($entry);
+        $this->streaks->updateAfterConfirmation($user, $entry->type);
+        $this->funds->debitFund($fund, $entry->amount, $entry->id, $entry->note);
+
+        $balF = 'Rp ' . number_format($fund->current_balance, 0, ',', '.');
+        $this->telegram->sendMessage($chatId,
+            "✅ Dicatat dari *{$fund->name}*!\nSaldo sekarang: {$balF}"
+        );
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -134,149 +244,697 @@ class MessageRouter
     {
         $msg = strtolower(trim($message));
 
-        // /start for returning users — just show help
+        if ($msg === 'buka dashboard' || $msg === '/dashboard') {
+            $url = \Illuminate\Support\Facades\URL::temporarySignedRoute(
+                'dashboard.auth',
+                now()->addMinutes(30),
+                ['telegram_id' => $user->telegram_chat_id]
+            );
+            
+            $this->telegram->sendMessageWithInlineKeyboard(
+                $chatId,
+                "Ini link dashboard kamu (berlaku 30 menit):",
+                [['text' => '📊 Buka Dashboard', 'url' => $url]]
+            );
+            return true;
+        }
+
+        if (in_array($msg, ['halo', 'hai', 'hello', 'hi'])) {
+            $this->telegram->sendMessage($chatId, "Halo, {$user->name}! Ada yang bisa Butler bantu catat hari ini?");
+            return true;
+        }
+
         if ($msg === '/start') {
             $this->sendHelp($user, $chatId);
             return true;
         }
-
         if (in_array($msg, ['/summary', 'summary', 'ringkasan'])) {
             $this->sendQuickSummary($user, $chatId);
             return true;
         }
-
         if (in_array($msg, ['/help', 'help', 'bantuan'])) {
             $this->sendHelp($user, $chatId);
             return true;
+        }
+
+        // Natural language balance queries → skip AI, go direct
+        $balanceKeywords = [
+            'tampilkan semua tabungan', 'tampilkan semua uang', 'tampilkan semua dana',
+            'lihat tabungan', 'lihat semua uang', 'lihat dana', 'cek tabungan',
+            'saldo saya', 'semua dana saya', 'semua saldo',
+        ];
+        foreach ($balanceKeywords as $kw) {
+            if (str_contains($msg, $kw)) {
+                $this->handleQueryBalance($user, $chatId, ['query_target' => 'all_funds']);
+                return true;
+            }
         }
 
         return false;
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // ENTRY HANDLING (with confidence-based routing)
+    // ENTRY HANDLING
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Handle expense/meal/saving entry creation.
-     *
-     * Per spec confidence behavior:
-     * ≥ 0.90 → Auto-confirm with inline keyboard (default tap = save)
-     * 0.75–0.89 → Show confirmation with parsed data, require explicit confirm
-     * 0.50–0.74 → Show parsed data, highlight uncertain fields, ask to verify
-     * < 0.50 → Don't guess — ask clarifying question
-     */
     private function handleEntry(User $user, string $chatId, string $rawMessage, array $parsed, float $confidence): void
     {
-        $intent = $parsed['intent'];
-
-        // < 0.50: Don't guess — ask clarifying question
         if ($confidence < 0.50) {
             $this->telegram->sendMessage($chatId, $this->telegram->getLowConfidenceResponse());
             return;
         }
 
-        // Create pending entry
+        $intent = $parsed['intent'];
+
+        // ── Dual log: food message that also has an amount ────────────
+        if ($intent === 'log_meal_and_expense') {
+            $this->handleDualLog($user, $chatId, $rawMessage, $parsed, $confidence);
+            return;
+        }
+
+        if ($intent === 'log_expense' && $user->isCalorieMode() && !empty($parsed['food_item'])) {
+            $this->handleDualLog($user, $chatId, $rawMessage, $parsed, $confidence);
+            return;
+        }
+
         $entry = $this->entries->createPendingEntry($user, $parsed, $rawMessage);
 
-        // Format the confirmation message
+        // ── v2.1: Resolve → Policy pipeline for expense entries ───────
+        if (in_array($intent, ['log_expense', 'log_bill_payment', 'log_meal_and_expense'])) {
+            [$accountSource, $accountConfidence, $autoApply, $resolvedFund] =
+                $this->resolveAccountForEntry($user, $parsed, $entry);
+
+            $interactionMode = $this->policy->resolveInteractionMode(
+                $accountSource, $accountConfidence, $autoApply
+            );
+
+            if ($interactionMode === PolicyEngine::MODE_NEEDS_CLARIFICATION) {
+                // Show account picker inline keyboard — do NOT auto-confirm
+                $this->askAccountSelection($chatId, $entry->id, $user);
+                return;
+            }
+
+            if ($interactionMode === PolicyEngine::MODE_SOFT_CONFIRMATION) {
+                // Show suggestion as pre-selected in confirmation text
+                $confirmationText = $this->buildSoftConfirmationText($parsed, $confidence, $resolvedFund);
+                $buttons = $this->telegram->buildConfirmationButtons($entry->id);
+                $this->telegram->sendMessageWithInlineKeyboard($chatId, $confirmationText, $buttons);
+                return;
+            }
+
+            // explicit_input or auto_apply: assign fund and confirm directly
+            if ($resolvedFund && !$entry->source_fund_id) {
+                $entry->update(['source_fund_id' => $resolvedFund->id, 'source_fund_confirmed' => true]);
+            }
+        }
+
+        // ── High confidence (≥0.90) or auto_apply → confirm immediately ─
+        if ($confidence >= 0.90) {
+            $this->confirmAndSendWithUndo($user, $chatId, $entry);
+            return;
+        }
+
+        // ── Medium confidence → show confirmation keyboard ────────────
         $confirmationText = match ($intent) {
-            'expense' => $this->telegram->formatExpenseConfirmation($parsed, $confidence),
-            'meal' => $this->telegram->formatMealConfirmation($parsed, $confidence),
-            'saving' => $this->telegram->formatSavingConfirmation($parsed),
-            default => '📝 Data terdeteksi.',
+            'log_expense'         => $this->telegram->formatExpenseConfirmation($parsed, $confidence),
+            'log_meal'            => $this->telegram->formatMealConfirmation($parsed, $confidence),
+            'log_saving'          => $this->telegram->formatSavingConfirmation($parsed),
+            'log_income'          => $this->telegram->formatIncomeConfirmation($parsed, $confidence),
+            'log_bill_payment'    => $this->telegram->formatBillPaymentConfirmation($parsed, $confidence),
+            'log_debt_payment'    => $this->telegram->formatDebtPaymentConfirmation($parsed, $confidence),
+            'log_sinking_deposit' => $this->telegram->formatSinkingDepositConfirmation($parsed, $confidence),
+            'transfer_fund'       => $this->telegram->formatTransferConfirmation($parsed, $confidence),
+            default               => '📝 Data terdeteksi.',
         };
 
-        // Build inline keyboard buttons
         $buttons = $this->telegram->buildConfirmationButtons($entry->id);
-
-        // Send with inline keyboard
         $this->telegram->sendMessageWithInlineKeyboard($chatId, $confirmationText, $buttons);
     }
 
+    /**
+     * Dual log: message has both food + money → log as meal AND expense.
+     * e.g. "makan nasi goreng pakai telur 25rb"
+     */
+    private function handleDualLog(User $user, string $chatId, string $rawMessage, array $parsed, float $confidence): void
+    {
+        $responses = [];
+
+        // Log meal side (if calorie mode)
+        if ($user->isCalorieMode() && !empty($parsed['food_item'])) {
+            $mealParsed = [
+                'intent'               => 'log_meal',
+                'confidence'           => $parsed['confidence'] ?? $confidence,
+                'food_item'            => $parsed['food_item'],
+                'calories'             => $parsed['calories'] ?? null,
+                'is_calorie_estimated' => $parsed['is_calorie_estimated'] ?? true,
+                'note'                 => $parsed['note'] ?? null,
+            ];
+            $mealEntry = $this->entries->createPendingEntry($user, $mealParsed, $rawMessage);
+            $this->entries->confirmEntry($mealEntry);
+            $totalCal = $this->entries->getTodayCalories($user);
+            $calGoal  = $user->daily_calorie_goal;
+            $calStr   = $calGoal ? "{$totalCal}/{$calGoal} kcal" : "{$totalCal} kcal";
+            $responses[] = "🍽️ *{$mealParsed['food_item']}* — " . ($mealParsed['calories'] ?? '?') . " kcal dicatat.\n🔥 Total hari ini: {$calStr}";
+        }
+
+        // Log expense side (if finance mode and amount present)
+        if ($user->isFinanceMode() && !empty($parsed['amount'])) {
+            $expenseParsed = [
+                'intent'     => 'log_expense',
+                'confidence' => $parsed['confidence'] ?? $confidence,
+                'amount'     => $parsed['amount'],
+                'category'   => $parsed['category'] ?? 'food_drink',
+                'merchant'   => $parsed['merchant'] ?? null,
+                'note'       => $parsed['food_item'] ?? $parsed['note'] ?? null,
+            ];
+            $expenseEntry = $this->entries->createPendingEntry($user, $expenseParsed, $rawMessage);
+            $this->entries->confirmEntry($expenseEntry);
+            $this->streaks->updateAfterConfirmation($user, 'expense');
+            $totalSpent = $this->entries->getTodaySpending($user);
+            $remaining  = $this->entries->getBudgetRemaining($user);
+            $spentF     = number_format($totalSpent, 0, ',', '.');
+            $line       = "💸 *Rp " . number_format($parsed['amount'], 0, ',', '.') . "* dicatat.\n   Total hari ini: Rp {$spentF}";
+            if ($remaining !== null) {
+                $remF = number_format(abs($remaining), 0, ',', '.');
+                $line .= $remaining >= 0 ? " | Sisa: Rp {$remF}" : " | ⚠️ Melebihi budget Rp {$remF}";
+            }
+            $responses[] = $line;
+        }
+
+        if (empty($responses)) {
+            $this->telegram->sendMessage($chatId, 'Data tidak dapat dicatat. Coba ulangi ya!');
+            return;
+        }
+
+        $this->telegram->sendMessage($chatId, "✅ Dicatat!\n\n" . implode("\n\n", $responses));
+    }
+
+    /**
+     * Fix 3: After creating a low-confidence expense entry, ask which fund to use.
+     */
+    private function askFundSource(User $user, string $chatId, int $entryId): void
+    {
+        $funds = $this->funds->getFundsForUser($user);
+        if ($funds->isEmpty()) return;
+
+        $buttons = [];
+        $buttons[] = ['text' => '📅 Budget Harian', 'callback_data' => "fund_src:{$entryId}:daily"];
+        foreach ($funds->take(4) as $fund) {
+            $buttons[] = [
+                'text' => "📁 {$fund->name}",
+                'callback_data' => "fund_src:{$entryId}:{$fund->id}",
+            ];
+        }
+        $buttons[] = ['text' => '⏭️ Skip', 'callback_data' => "fund_src:{$entryId}:skip"];
+
+        $this->telegram->sendFundSelectionKeyboard(
+            $chatId,
+            "💡 Uang ini dari mana?",
+            $buttons
+        );
+    }
+
+    /**
+     * Get today's running total for a given entry type (used after auto-save).
+     */
+    private function getTodayTotalForType(User $user, string $type): int
+    {
+        return match($type) {
+            'expense', 'bill_payment' => $this->entries->getTodaySpending($user),
+            'meal'                    => $this->entries->getTodayCalories($user),
+            'saving', 'sinking_fund_deposit' => $this->entries->getTotalSavings($user),
+            'income'                  => $this->entries->getTodayIncome($user),
+            default                   => 0,
+        };
+    }
+
+    /**
+     * Get the remaining budget/calorie for a given entry type.
+     */
+    private function getRemainingForType(User $user, string $type): ?int
+    {
+        return match($type) {
+            'expense', 'bill_payment' => $this->entries->getBudgetRemaining($user),
+            'meal'                    => $user->daily_calorie_goal,
+            default                   => null,
+        };
+    }
+
     // ════════════════════════════════════════════════════════════════════
-    // CALLBACK QUERY HANDLERS
+    // ONBOARDING CALLBACK ROUTING
+    // ════════════════════════════════════════════════════════════════════
+
+    private function handleOnboardingCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        // Format: onboard:mode:finance | onboard:fund:emergency | onboard:fund:skip
+        $parts = explode(':', $data);
+        $section = $parts[1] ?? '';
+        $value = $parts[2] ?? '';
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        match ($section) {
+            'mode' => $this->onboarding->handleModeCallback($user, $chatId, $value),
+            'fund' => $this->onboarding->handleFundSelectionCallback($user, $chatId, $value, $messageId),
+            default => null,
+        };
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ENTRY CALLBACK HANDLERS
     // ════════════════════════════════════════════════════════════════════
 
     private function confirmEntry(User $user, string $chatId, string $callbackQueryId, Entry $entry, int $messageId): void
     {
-        // Confirm the entry
         $this->entries->confirmEntry($entry);
-
-        // Update streaks
         $this->streaks->updateAfterConfirmation($user, $entry->type);
+        $this->applyFundEffect($user, $entry);
+        $this->applyBillDebtEffect($user, $entry);
 
-        // Build confirmed message with totals
         $todayTotal = match ($entry->type) {
-            'expense' => $this->entries->getTodaySpending($user),
-            'meal' => $this->entries->getTodayCalories($user),
-            'saving' => $this->entries->getTotalSavings($user),
-            default => 0,
+            'expense', 'bill_payment'          => $this->entries->getTodaySpending($user),
+            'meal'                             => $this->entries->getTodayCalories($user),
+            'saving', 'sinking_fund_deposit'   => $this->entries->getTotalSavings($user),
+            'income'                           => $this->entries->getTodayIncome($user),
+            default                            => 0,
         };
 
         $remaining = match ($entry->type) {
-            'expense' => $this->entries->getBudgetRemaining($user),
-            'meal' => $user->daily_calorie_goal,
-            default => null,
+            'expense', 'bill_payment' => $this->entries->getBudgetRemaining($user),
+            'meal'                    => $user->daily_calorie_goal,
+            default                   => null,
         };
 
-        $parsed = $this->entryToParsedArray($entry);
+        $parsed       = $this->entryToParsedArray($entry);
         $confirmedMsg = $this->telegram->formatConfirmedMessage($entry->type, $parsed, $todayTotal, $remaining);
 
-        // Update the message (remove keyboard, show confirmed)
-        $this->telegram->editMessage($chatId, $messageId, $confirmedMsg);
-        $this->telegram->answerCallbackQuery($callbackQueryId, '✅ Disimpan!');
+        // v2.1: Edit the pending confirmation message to the confirmed state + undo button
+        $undoToken = Str::random(16);
+        $entry->update([
+            'undo_token'       => $undoToken,
+            'undo_expires_at'  => now()->addMinutes(5),
+        ]);
+
+        // Edit the original message to confirmed + [↩ Undo] button
+        $this->telegram->editMessageWithKeyboard(
+            $chatId,
+            $messageId,
+            $confirmedMsg,
+            [[$this->telegram->buildUndoButton($undoToken)]]
+        );
+        $entry->update(['telegram_message_id' => $messageId]);
+
+        // Dispatch behavioral memory update (queue: low)
+        UpdateBehavioralMemory::dispatch($entry->id, $chatId)->onQueue('low');
+
+        $this->telegram->answerCallbackQuery($callbackQueryId, 'Dicatat.');
     }
 
-    private function editEntry(User $user, string $chatId, string $callbackQueryId, Entry $entry, int $messageId): void
+    private function editEntry(string $chatId, string $callbackQueryId, Entry $entry, int $messageId): void
     {
-        // Per spec: "User taps Edit → prompt them to retype (keep it simple)"
         $this->entries->cancelEntry($entry);
-
         $this->telegram->editMessage($chatId, $messageId,
-            "✏️ Oke, coba ketik ulang dengan format yang benar ya!\n"
-            . "Contoh: `50k makan siang` atau `grab 23rb`"
+            "✏️ Oke, coba ketik ulang ya!\nContoh: `makan siang 35k` atau `grab 23rb`"
         );
         $this->telegram->answerCallbackQuery($callbackQueryId, '✏️ Silakan ketik ulang.');
     }
 
-    private function cancelEntry(User $user, string $chatId, string $callbackQueryId, Entry $entry, int $messageId): void
+    private function cancelEntry(string $chatId, string $callbackQueryId, Entry $entry, int $messageId): void
     {
         $this->entries->cancelEntry($entry);
-
         $this->telegram->editMessage($chatId, $messageId, '❌ Dibatalkan. Tidak ada yang disimpan.');
         $this->telegram->answerCallbackQuery($callbackQueryId, '❌ Dibatalkan.');
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // QUERY HANDLING
+    // FUND & BILL/DEBT EFFECTS AFTER CONFIRMATION
     // ════════════════════════════════════════════════════════════════════
 
-    private function handleQuery(User $user, string $chatId, array $parsed): void
+    private function applyFundEffect(User $user, Entry $entry): void
     {
-        $queryType = $parsed['query_type'] ?? 'summary';
+        try {
+            $metadata = is_string($entry->metadata) ? json_decode($entry->metadata, true) : ($entry->metadata ?? []);
+            
+            switch ($entry->type) {
+                case 'expense':
+                    // Debit the source fund or fallback to default spending fund
+                    $fund = null;
+                    if (!empty($metadata['fund_name'])) {
+                        $fund = $this->funds->findFundByName($user, $metadata['fund_name']);
+                    }
+                    if (!$fund && $entry->source_fund_id) {
+                        $fund = \App\Models\Fund::find($entry->source_fund_id);
+                    }
+                    if (!$fund) {
+                        $fund = $user->getDefaultSpendingFund();
+                    }
+                    
+                    if ($fund) {
+                        $this->funds->debitFund($fund, $entry->amount, $entry->id, $entry->note);
+                        if (!$entry->source_fund_id || $entry->source_fund_id !== $fund->id) {
+                            $entry->update([
+                                'source_fund_id' => $fund->id,
+                                'source_fund_confirmed' => true
+                            ]);
+                        }
+                    }
+                    break;
 
-        $response = match ($queryType) {
-            'spending_today' => $this->telegram->formatSpendingTodayResponse(
-                $this->entries->getTodaySpending($user),
-                $this->entries->getBudgetRemaining($user)
-            ),
-            'spending_month' => $this->buildSpendingMonthResponse($user),
-            'calories_today' => $this->telegram->formatCaloriesTodayResponse(
-                $this->entries->getTodayCalories($user),
-                $user->daily_calorie_goal
-            ),
-            'summary', 'balance' => $this->buildQuickSummaryText($user),
-            default => '🤔 Data tidak ditemukan.',
-        };
+                case 'income':
+                    // Credit the requested fund or fallback to Master Savings Fund (Tabungan)
+                    $fund = null;
+                    if (!empty($metadata['fund_name'])) {
+                        $fund = $this->funds->findFundByName($user, $metadata['fund_name']);
+                    }
+                    if (!$fund) {
+                        $fund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'savings')->first();
+                    }
+                    if (!$fund) {
+                        $fund = $user->getDefaultSpendingFund();
+                    }
+                    if ($fund) {
+                        $this->funds->creditFund($fund, $entry->amount, $entry->id, $entry->note);
+                    }
+                    break;
 
-        $this->telegram->sendMessage($chatId, $response);
+                case 'saving':
+                    // Credit the fund referenced in metadata/note, or default savings
+                    $fundName = $metadata['fund_name'] ?? $entry->note;
+                    $fund = null;
+                    if ($fundName) {
+                        $fund = $this->funds->findFundByName($user, $fundName);
+                    }
+                    if (!$fund) {
+                        $fund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'savings')->first();
+                    }
+                    if (!$fund) {
+                        // Fallback to create a "Tabungan" fund
+                        $fund = $this->funds->createFund($user, [
+                            'fund_type' => 'savings',
+                            'name' => 'Tabungan',
+                            'initial_balance' => 0,
+                        ]);
+                    }
+                    if ($fund) {
+                        $this->funds->creditFund($fund, $entry->amount, $entry->id, 'User deposit');
+                    }
+                    break;
+
+                case 'sinking_fund_deposit':
+                    $fundName = $metadata['fund_name'] ?? $entry->note;
+                    $fund = null;
+                    if ($fundName) {
+                        $fund = $this->funds->findFundByName($user, $fundName);
+                    }
+                    if (!$fund) {
+                        $fund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'sinking_fund')->first();
+                    }
+                    if ($fund) {
+                        $this->funds->creditFund($fund, $entry->amount, $entry->id);
+                    }
+                    break;
+
+                case 'transfer':
+                    $sourceName = $metadata['source_fund'] ?? null;
+                    $targetName = $metadata['target_fund'] ?? null;
+                    
+                    $sourceFund = null;
+                    if ($sourceName) {
+                        $sourceFund = $this->funds->findFundByName($user, $sourceName);
+                    }
+                    if (!$sourceFund) {
+                        $sourceFund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'savings')->first();
+                    }
+                    
+                    $targetFund = null;
+                    if ($targetName) {
+                        $targetFund = $this->funds->findFundByName($user, $targetName);
+                    }
+                    
+                    if ($sourceFund && $targetFund) {
+                        $this->funds->debitFund($sourceFund, $entry->amount, $entry->id, "Transfer ke {$targetFund->name}");
+                        $this->funds->creditFund($targetFund, $entry->amount, $entry->id, "Transfer dari {$sourceFund->name}");
+                    }
+                    break;
+            }
+        } catch (\Exception $e) {
+            Log::error('applyFundEffect failed', ['entry_id' => $entry->id, 'error' => $e->getMessage()]);
+        }
     }
 
-    private function handleGeneral(User $user, string $chatId, string $message, array $parsed): void
+    private function applyBillDebtEffect(User $user, Entry $entry): void
     {
-        $response = $parsed['message'] ?? $this->ai->chat($message);
-        $this->telegram->sendMessage($chatId, $response);
+        try {
+            if ($entry->type === 'bill_payment' && $entry->merchant) {
+                $bill = $this->bills->findMatchingBill($user, $entry->merchant);
+                if ($bill) {
+                    $this->bills->markPaid($bill, $entry->amount);
+                    $user->update(['has_bills_setup' => true]);
+
+                    // Debit the appropriate fund
+                    $fund = $bill->source_fund_id
+                        ? \App\Models\Fund::find($bill->source_fund_id)
+                        : $user->getDefaultSpendingFund();
+                    if ($fund) {
+                        $this->funds->debitFund($fund, $entry->amount, $entry->id, "Bayar Tagihan: {$bill->name}");
+                        $entry->update([
+                            'source_fund_id' => $fund->id,
+                            'source_fund_confirmed' => true
+                        ]);
+                    }
+                }
+            }
+
+            if ($entry->type === 'debt_payment' && $entry->note) {
+                $debt = $this->debts->findMatchingDebt($user, $entry->note);
+                if ($debt) {
+                    $this->debts->recordPayment($debt, $entry->amount);
+                    $user->update(['has_debt_declared' => true]);
+
+                    // Debit default spending fund
+                    $fund = $user->getDefaultSpendingFund();
+                    if ($fund) {
+                        $this->funds->debitFund($fund, $entry->amount, $entry->id, "Bayar Cicilan: {$debt->name}");
+                        $entry->update([
+                            'source_fund_id' => $fund->id,
+                            'source_fund_confirmed' => true
+                        ]);
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('applyBillDebtEffect failed', ['entry_id' => $entry->id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ACTION HANDLERS
+    // ════════════════════════════════════════════════════════════════════
+
+    private function handleAddBill(User $user, string $chatId, array $parsed): void
+    {
+        if (!isset($parsed['amount']) || !isset($parsed['due_day'])) {
+            $this->telegram->sendMessage($chatId,
+                "Butler butuh: nama tagihan, nominal, dan tanggal jatuh tempo.\n"
+                . "Contoh: \"tambahin tagihan Netflix 65rb tiap tanggal 15\""
+            );
+            return;
+        }
+
+        try {
+            $bill = $this->bills->createBill($user, [
+                'name' => $parsed['name'] ?? 'Tagihan',
+                'amount' => $parsed['amount'],
+                'due_day' => $parsed['due_day'],
+            ]);
+
+            $amountF = 'Rp ' . number_format($bill->amount, 0, ',', '.');
+            $this->telegram->sendMessage($chatId,
+                "✅ *Tagihan ditambahkan!*\n\n"
+                . "📋 {$bill->name}\n"
+                . "💰 {$amountF}/bulan\n"
+                . "📅 Jatuh tempo: tanggal {$bill->due_day}\n\n"
+                . "Butler akan ingatkan 3 hari sebelum jatuh tempo."
+            );
+        } catch (\Exception $e) {
+            $this->telegram->sendMessage($chatId, 'Gagal menyimpan tagihan. Coba lagi ya!');
+        }
+    }
+
+    private function handleAddSinkingFund(User $user, string $chatId, array $parsed): void
+    {
+        try {
+            $fund = $this->funds->createFund($user, [
+                'fund_type' => 'sinking_fund',
+                'name' => $parsed['name'] ?? 'Sinking Fund',
+                'target_amount' => $parsed['target_amount'] ?? null,
+                'target_date' => $parsed['target_date'] ?? null,
+            ]);
+
+            $msg = "✅ *Sinking fund dibuat!*\n\n📁 {$fund->name}";
+            if ($fund->target_amount) {
+                $targetF = 'Rp ' . number_format($fund->target_amount, 0, ',', '.');
+                $msg .= "\n🎯 Target: {$targetF}";
+            }
+            if ($fund->target_date) {
+                $msg .= "\n📅 Deadline: " . $fund->target_date->format('d M Y');
+            }
+            $msg .= "\n\nAyo mulai isi dana ini! Ketik: \"nabung 200k ke {$fund->name}\"";
+
+            $this->telegram->sendMessage($chatId, $msg);
+        } catch (\Exception $e) {
+            $this->telegram->sendMessage($chatId, 'Gagal membuat sinking fund. Coba lagi ya!');
+        }
+    }
+
+    private function handleQueryBalance(User $user, string $chatId, array $parsed): void
+    {
+        $queryTarget = $parsed['query_target'] ?? 'total_savings';
+        $fundName = $parsed['fund_name'] ?? null;
+
+        if ($fundName) {
+            $fund = $this->funds->findFundByName($user, $fundName);
+            if ($fund) {
+                $balF = 'Rp ' . number_format($fund->current_balance, 0, ',', '.');
+                $msg = "💰 *{$fund->name}*\nSaldo: {$balF}";
+                if ($fund->target_amount) {
+                    $targetF = 'Rp ' . number_format($fund->target_amount, 0, ',', '.');
+                    $msg .= "\n🎯 Target: {$targetF} ({$fund->progress_pct}%)";
+                    if ($fund->on_track !== null) {
+                        $msg .= $fund->on_track ? "\n✅ On track!" : "\n⚠️ Perlu tambah setoran!";
+                    }
+                }
+                $this->telegram->sendMessage($chatId, $msg);
+                return;
+            }
+            // Fund not found
+            $this->telegram->sendMessage($chatId,
+                "Dana '{$fundName}' belum ada. Mau Butler buatin? Ketik: \"buat sinking fund {$fundName}\""
+            );
+            return;
+        }
+
+        // ── Summary of all funds ────────────────────────────────────────
+        $allFunds = $this->funds->getFundsForUser($user);
+        $grandTotal = $allFunds->sum('current_balance');
+        $grandTotalF = number_format($grandTotal, 0, ',', '.');
+
+        $msg = "💰 *Total Semua Uang: Rp {$grandTotalF}*\n";
+        $msg .= "──────────────\n";
+
+        // Spending budget section — show with today's context
+        if ($user->daily_budget_idr) {
+            $todaySpent = $this->entries->getTodaySpending($user);
+            $remaining  = $this->entries->getBudgetRemaining($user);
+            $budgetF    = number_format($user->daily_budget_idr, 0, ',', '.');
+            $spentF     = number_format($todaySpent, 0, ',', '.');
+            $remF       = number_format(abs($remaining ?? 0), 0, ',', '.');
+            $msg .= "\n📅 *Budget Harian*\n";
+            $msg .= "   Limit: Rp {$budgetF}\n";
+            $msg .= "   Terpakai hari ini: Rp {$spentF}\n";
+            if ($remaining !== null) {
+                $msg .= $remaining >= 0
+                    ? "   ✅ Sisa: Rp {$remF}\n"
+                    : "   ⚠️ Melebihi budget: Rp {$remF}\n";
+            }
+        }
+
+        // Group funds by type
+        $typeGroups = [
+            'emergency_fund' => ['label' => '🛡️ Dana Darurat', 'funds' => []],
+            'savings'        => ['label' => '📈 Tabungan/Invest', 'funds' => []],
+            'sinking_fund'   => ['label' => '✈️ Sinking Fund', 'funds' => []],
+            'financial_goal' => ['label' => '🎯 Financial Goal', 'funds' => []],
+        ];
+
+        foreach ($allFunds as $fund) {
+            if ($fund->is_default_spending) continue; // already shown as budget
+            if (isset($typeGroups[$fund->fund_type])) {
+                $typeGroups[$fund->fund_type]['funds'][] = $fund;
+            }
+        }
+
+        foreach ($typeGroups as $group) {
+            if (empty($group['funds'])) continue;
+            $msg .= "\n{$group['label']}\n";
+            foreach ($group['funds'] as $fund) {
+                $balF = number_format($fund->current_balance, 0, ',', '.');
+                $msg .= "   • {$fund->name}: Rp {$balF}";
+                if ($fund->target_amount) {
+                    $pct = $fund->progress_pct;
+                    $msg .= " ({$pct}%)";
+                    if ($fund->on_track !== null) {
+                        $msg .= $fund->on_track ? " ✅" : " ⚠️";
+                    }
+                }
+                $msg .= "\n";
+            }
+        }
+
+        // Bills section
+        $bills = $user->bills()->active()->get();
+        if ($bills->isNotEmpty()) {
+            $msg .= "\n🧾 *Tagihan Tetap*\n";
+            foreach ($bills as $bill) {
+                $billF = number_format($bill->amount, 0, ',', '.');
+                $paid  = $bill->this_month_paid ? ' ✅' : " (tgl {$bill->due_day})";
+                $msg .= "   • {$bill->name}: Rp {$billF}{$paid}\n";
+            }
+        }
+
+        // Debts section
+        $debts = $user->debts()->active()->get();
+        if ($debts->isNotEmpty()) {
+            $msg .= "\n💳 *Cicilan Aktif*\n";
+            foreach ($debts as $debt) {
+                $installF = number_format($debt->monthly_installment, 0, ',', '.');
+                $remainB  = number_format($debt->remaining_balance, 0, ',', '.');
+                $msg .= "   • {$debt->name}: Rp {$installF}/bln (sisa Rp {$remainB})\n";
+            }
+        }
+
+        if ($allFunds->isEmpty() && !$user->daily_budget_idr && $bills->isEmpty() && $debts->isEmpty()) {
+            $msg .= "\n_Belum ada data keuangan. Coba catat income atau pengeluaran pertama kamu!_";
+        }
+
+        $this->telegram->sendMessage($chatId, $msg);
+    }
+
+
+    private function handleQuerySpending(User $user, string $chatId, array $parsed): void
+    {
+        $period = $parsed['period'] ?? 'today';
+
+        if ($period === 'month') {
+            $total = $this->entries->getMonthSpending($user);
+            $response = $this->telegram->formatSpendingTodayResponse($total);
+            $this->telegram->sendMessage($chatId, str_replace('hari ini', 'bulan ini', $response));
+        } else {
+            $total = $this->entries->getTodaySpending($user);
+            $remaining = $this->entries->getBudgetRemaining($user);
+            $this->telegram->sendMessage($chatId,
+                $this->telegram->formatSpendingTodayResponse($total, $remaining)
+            );
+        }
+    }
+
+    private function handleSetReminder(User $user, string $chatId, array $parsed): void
+    {
+        try {
+            \App\Models\Reminder::create([
+                'user_id' => $user->id,
+                'type' => 'time_based',
+                'trigger_time' => $parsed['trigger_time'] ?? '20:00',
+                'trigger_days' => $parsed['trigger_days'] ?? 'mon,tue,wed,thu,fri,sat,sun',
+                'message_template' => $parsed['reminder_text'] ?? 'Pengingat dari Butler!',
+                'is_system' => false,
+            ]);
+
+            $time = $parsed['trigger_time'] ?? '20:00';
+            $this->telegram->sendMessage($chatId, "✅ Pengingat di-set untuk jam {$time}!");
+        } catch (\Exception $e) {
+            $this->telegram->sendMessage($chatId, 'Gagal set pengingat. Coba lagi ya!');
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -286,51 +944,54 @@ class MessageRouter
     private function sendHelp(User $user, string $chatId): void
     {
         $help = "🤖 *Butler - Asisten Harianmu*\n\n"
-            . "Kirim pesan biasa, Butler otomatis ngerti!\n\n"
-            . "💸 *Pengeluaran:*\n"
-            . "• `makan nasi goreng 35k`\n"
-            . "• `grab 23rb`\n\n"
-            . "🍽️ *Makanan:*\n"
-            . "• `makan nasi goreng`\n"
-            . "• `lunch mie ayam + es teh`\n\n"
-            . "💎 *Tabungan:*\n"
-            . "• `nabung 500rb`\n"
-            . "• `save 1jt buat emergency`\n\n"
-            . "📊 *Cek Data:*\n"
-            . "• `summary` / `ringkasan`\n"
-            . "• `berapa pengeluaran hari ini?`";
+            . "Kirim pesan biasa, Butler otomatis ngerti!\n\n";
+
+        if ($user->isFinanceMode()) {
+            $help .= "💸 *Pengeluaran:* `makan nasi goreng 35k`\n"
+                . "💰 *Income:* `gajian 5jt`\n"
+                . "🧾 *Tagihan:* `bayar kos 1.5jt`\n"
+                . "💳 *Cicilan:* `bayar cicilan motor 800rb`\n"
+                . "💎 *Tabungan:* `nabung 500rb ke dana darurat`\n"
+                . "✈️ *Sinking Fund:* `masukin 200k ke nabung liburan`\n\n";
+        }
+
+        if ($user->isCalorieMode()) {
+            $help .= "🍽️ *Makanan:* `makan nasi goreng`\n\n";
+        }
+
+        $help .= "📊 *Cek Data:*\n"
+            . "• `summary` — ringkasan hari ini\n"
+            . "• `saldo dana darurat berapa?`\n"
+            . "• `pengeluaran hari ini?`";
 
         $this->telegram->sendMessage($chatId, $help);
     }
 
     private function sendQuickSummary(User $user, string $chatId): void
     {
-        $response = $this->buildQuickSummaryText($user);
-        $this->telegram->sendMessage($chatId, $response);
-    }
-
-    private function buildQuickSummaryText(User $user): string
-    {
         $spending = $this->entries->getTodaySpending($user);
         $calories = $this->entries->getTodayCalories($user);
-        $savings = $this->entries->getTotalSavings($user);
         $remaining = $this->entries->getBudgetRemaining($user);
+        $income = $this->entries->getTodayIncome($user);
         $streak = $user->streak;
 
         $spendF = number_format($spending, 0, ',', '.');
-        $savingsF = number_format($savings, 0, ',', '.');
+        $msg = "📊 *Ringkasan Hari Ini*\n\n";
 
-        $msg = "📊 *Ringkasan Hari Ini*\n\n"
-            . "💸 Pengeluaran: Rp {$spendF}\n";
-
-        if ($remaining !== null) {
-            $remainF = number_format(abs($remaining), 0, ',', '.');
-            $msg .= $remaining >= 0
-                ? "💰 Sisa budget: Rp {$remainF}\n"
-                : "⚠️ Melebihi budget: Rp {$remainF}\n";
+        if ($user->isFinanceMode()) {
+            $msg .= "💸 Pengeluaran: Rp {$spendF}\n";
+            if ($income > 0) {
+                $msg .= "💰 Income: Rp " . number_format($income, 0, ',', '.') . "\n";
+            }
+            if ($remaining !== null) {
+                $remainF = number_format(abs($remaining), 0, ',', '.');
+                $msg .= $remaining >= 0
+                    ? "💰 Sisa budget: Rp {$remainF}\n"
+                    : "⚠️ Melebihi budget: Rp {$remainF}\n";
+            }
         }
 
-        if ($calories > 0) {
+        if ($user->isCalorieMode() && $calories > 0) {
             $msg .= "🔥 Kalori: {$calories}";
             if ($user->daily_calorie_goal) {
                 $msg .= "/{$user->daily_calorie_goal}";
@@ -338,56 +999,230 @@ class MessageRouter
             $msg .= " kcal\n";
         }
 
-        $msg .= "💎 Total Tabungan: Rp {$savingsF}\n";
-
         if ($streak && $streak->log_current > 0) {
             $msg .= "\n🔥 Streak: {$streak->log_current} hari berturut-turut!";
         }
 
-        return $msg;
+        $this->telegram->sendMessage($chatId, $msg);
     }
 
-    private function buildSpendingMonthResponse(User $user): string
-    {
-        $total = $this->entries->getMonthSpending($user);
-        $formatted = number_format($total, 0, ',', '.');
+    // ════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ════════════════════════════════════════════════════════════════════
 
-        $msg = "💸 Total pengeluaran bulan ini: *Rp {$formatted}*";
-
-        if ($user->daily_budget_idr) {
-            $now = \Carbon\Carbon::now($user->timezone);
-            $daysInMonth = $now->daysInMonth;
-            $monthlyBudget = $user->daily_budget_idr * $daysInMonth;
-            $budgetF = number_format($monthlyBudget, 0, ',', '.');
-            $pct = $monthlyBudget > 0 ? round(($total / $monthlyBudget) * 100) : 0;
-            $msg .= "\n🎯 Budget: Rp {$budgetF} ({$pct}%)";
-        }
-
-        return $msg;
-    }
-
-    /**
-     * Convert an Entry model back to the parsed array format for message formatting.
-     */
     private function entryToParsedArray(Entry $entry): array
     {
         return match ($entry->type) {
-            'expense' => [
-                'amount' => $entry->amount,
-                'category' => $entry->category,
-                'merchant' => $entry->merchant,
-                'note' => $entry->note,
-            ],
-            'meal' => [
-                'food_item' => $entry->food_item,
-                'calories' => $entry->calories,
-                'is_calorie_estimated' => $entry->is_calorie_estimated,
-            ],
-            'saving' => [
-                'amount' => $entry->amount,
-                'note' => $entry->note,
-            ],
-            default => [],
+            'expense'              => ['amount' => $entry->amount, 'category' => $entry->category, 'merchant' => $entry->merchant, 'note' => $entry->note],
+            'meal'                 => ['food_item' => $entry->food_item, 'calories' => $entry->calories, 'is_calorie_estimated' => $entry->is_calorie_estimated],
+            'saving'               => ['amount' => $entry->amount, 'note' => $entry->note, 'fund_name' => $entry->note],
+            'income'               => ['amount' => $entry->amount, 'source' => 'gaji', 'note' => $entry->note],
+            'bill_payment'         => ['amount' => $entry->amount, 'bill_name' => $entry->merchant ?? $entry->note],
+            'debt_payment'         => ['amount' => $entry->amount, 'debt_name' => $entry->note],
+            'sinking_fund_deposit' => ['amount' => $entry->amount, 'fund_name' => $entry->note],
+            default                => [],
         };
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // v2.1 — RESOLVE / POLICY HELPERS
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Run the Resolve layer (Layer 2) for expense-type entries.
+     * Returns [accountSource, confidence, autoApply, resolvedFund|null]
+     */
+    private function resolveAccountForEntry(User $user, array $parsed, Entry $entry): array
+    {
+        // Explicit account in message (user said "pakai GoPay")
+        if (!empty($parsed['account_name'])) {
+            $fund = $this->funds->findFundByName($user, $parsed['account_name']);
+            return ['explicit', 1.0, false, $fund];
+        }
+
+        $merchant = $parsed['merchant'] ?? null;
+
+        // Resolve from behavioral memory: merchant → account
+        if ($merchant) {
+            $memRow = $this->memory->resolve($user->id, 'merchant_account', $merchant);
+            if ($memRow) {
+                $fund = Fund::find($memRow->value['account_id'] ?? null);
+                return [
+                    'learned',
+                    (float) $memRow->behavioral_confidence,
+                    $memRow->canAutoApply(),
+                    $fund,
+                ];
+            }
+        }
+
+        // Fallback: category → account (future)
+        // Fallback: user default spending fund
+        $defaultFund = $user->getDefaultSpendingFund();
+        if ($defaultFund) {
+            return ['default', 0.0, false, $defaultFund];
+        }
+
+        return ['none', 0.0, false, null];
+    }
+
+    /**
+     * Send an account selection keyboard for needs_clarification mode.
+     * Shows all active funds as buttons.
+     */
+    private function askAccountSelection(string $chatId, int $entryId, User $user): void
+    {
+        $funds = $this->funds->getFundsForUser($user);
+        if ($funds->isEmpty()) {
+            $this->telegram->sendMessage($chatId, 'Belum ada akun yang tersimpan. Set up dulu di /setup.');
+            return;
+        }
+
+        $accounts = $funds->map(fn ($f) => ['id' => $f->id, 'name' => $f->name])->toArray();
+        $this->telegram->sendAccountSelectionKeyboard($chatId, $entryId, $accounts);
+    }
+
+    /**
+     * Build the confirmation text for soft_confirmation mode.
+     * Suggests the learned account as a light question.
+     */
+    private function buildSoftConfirmationText(array $parsed, float $confidence, ?Fund $suggestedFund): string
+    {
+        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $item   = $parsed['note'] ?? $parsed['merchant'] ?? $parsed['food_item'] ?? 'ini';
+        $account = $suggestedFund?->name ?? 'akun default';
+
+        return "Tercatat {$item} Rp {$amount}.\nIni pakai {$account} kayak biasanya kan?";
+    }
+
+    /**
+     * Confirm an entry immediately and send the confirmation + undo button.
+     * Used for high-confidence (≥0.90) and auto_apply flows.
+     */
+    private function confirmAndSendWithUndo(User $user, string $chatId, Entry $entry): void
+    {
+        $this->entries->confirmEntry($entry);
+        $this->streaks->updateAfterConfirmation($user, $entry->type);
+        $this->applyFundEffect($user, $entry);
+        $this->applyBillDebtEffect($user, $entry);
+
+        $todayTotal = $this->getTodayTotalForType($user, $entry->type);
+        $remaining  = $this->getRemainingForType($user, $entry->type);
+        $parsedArr  = $this->entryToParsedArray($entry);
+        $text       = $this->telegram->formatConfirmedMessage($entry->type, $parsedArr, $todayTotal, $remaining);
+
+        $undoToken  = \Illuminate\Support\Str::random(16);
+        $entry->update([
+            'undo_token'      => $undoToken,
+            'undo_expires_at' => now()->addMinutes(5),
+        ]);
+
+        $msgId = $this->telegram->sendConfirmedWithUndo($chatId, $text, $undoToken);
+        if ($msgId) {
+            $entry->update(['telegram_message_id' => $msgId]);
+        }
+
+        // Dispatch behavioral memory update asynchronously
+        UpdateBehavioralMemory::dispatch($entry->id, $chatId)->onQueue('low');
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // v2.1 — CALLBACK HANDLERS
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Handle account selection: user tapped [GoPay] / [BCA] / [Cash].
+     * Format: acct_sel:{entryId}:{fundId}
+     */
+    private function handleAccountSelectionCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        $parts   = explode(':', $data);
+        $entryId = (int) ($parts[1] ?? 0);
+        $fundId  = (int) ($parts[2] ?? 0);
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        $entry = Entry::forUser($user->id)->pending()->find($entryId);
+        $fund  = $fundId ? Fund::find($fundId) : null;
+
+        if (!$entry || !$fund) {
+            $this->telegram->editMessage($chatId, $messageId, 'Entry tidak ditemukan.');
+            return;
+        }
+
+        $entry->update([
+            'source_fund_id'        => $fund->id,
+            'source_fund_confirmed' => true,
+        ]);
+
+        // Confirm the entry now that we have an account
+        $this->confirmAndSendWithUndo($user, $chatId, $entry);
+
+        // Edit the account selection message to remove the buttons
+        $this->telegram->editMessage($chatId, $messageId, "Pakai {$fund->name}.");
+    }
+
+    /**
+     * Handle undo button tap.
+     * Format: undo:{undoToken}
+     * Edits the original confirmation message to show "Oke, dibatalin."
+     */
+    private function handleUndoCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        $token = substr($data, 5); // strip "undo:"
+        $entry = Entry::forUser($user->id)
+            ->where('undo_token', $token)
+            ->first();
+
+        if (!$entry) {
+            $this->telegram->answerCallbackQuery($callbackQueryId, 'Entry tidak ditemukan.');
+            return;
+        }
+
+        if (!$entry->isUndoable()) {
+            $this->telegram->answerCallbackQuery($callbackQueryId, 'Waktu undo sudah habis.');
+            return;
+        }
+
+        // Reverse balance
+        if ($entry->source_fund_id) {
+            $fund = Fund::find($entry->source_fund_id);
+            if ($fund && $entry->isFinancial()) {
+                // Re-credit the fund (reverse the debit)
+                $this->funds->creditFund($fund, $entry->amount, $entry->id, 'Undo entry');
+            }
+        }
+
+        $entry->markUndone();
+
+        // Edit the original confirmation message — remove buttons, update text
+        if ($entry->telegram_message_id) {
+            $this->telegram->stripUndoButton($chatId, $entry->telegram_message_id, 'Oke, dibatalin.');
+        }
+
+        $this->telegram->answerCallbackQuery($callbackQueryId, 'Dibatalin.');
+    }
+
+    /**
+     * Handle behavioral memory consent gate response.
+     * Format: consent_yes:{domain}:{subject} | consent_no:{domain}:{subject}
+     */
+    private function handleConsentCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        $isYes   = str_starts_with($data, 'consent_yes:');
+        $payload = $isYes ? substr($data, 12) : substr($data, 11);
+        $parts   = explode(':', $payload, 2);
+        $domain  = $parts[0] ?? '';
+        $subject = $parts[1] ?? '';
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        if ($isYes) {
+            $this->memory->applyConsent($user->id, $domain, $subject);
+            $this->telegram->editMessage($chatId, $messageId, 'Oke, aku otomatisin ke depannya.');
+        } else {
+            $this->memory->denyConsent($user->id, $domain, $subject);
+            $this->telegram->editMessage($chatId, $messageId, 'Oke, tidak akan aku otomatisin.');
+        }
     }
 }

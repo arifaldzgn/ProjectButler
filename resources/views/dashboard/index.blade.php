@@ -1,156 +1,73 @@
 @extends('layouts.dashboard')
-@section('title', 'Overview')
-
+@section('title', 'Dashboard — Butler')
 @section('content')
-<div class="page-header">
-    <h2>Good {{ now()->timezone(config('butler.timezone'))->format('H') < 12 ? 'Morning' : (now()->timezone(config('butler.timezone'))->format('H') < 18 ? 'Afternoon' : 'Evening') }} 👋</h2>
-    <p>{{ $today->format('l, d F Y') }} — Here's your daily snapshot</p>
+
+<div class="animate-in">
+    <h2>Halo, {{ $user->name }} 👋</h2>
+    <p class="page-desc">Ini ringkasan hari ini.</p>
 </div>
 
-<!-- Stat Cards -->
-<div class="grid-4">
-    <div class="card stat-card red animate-in">
-        <div class="stat-icon">💸</div>
-        <div class="card-title">Today's Spending</div>
-        <div class="card-value">Rp {{ number_format($todaySpending, 0, ',', '.') }}</div>
-        <div class="card-subtitle">Budget: Rp {{ number_format($monthBudget, 0, ',', '.') }}/mo</div>
-        @php $budgetPct = $monthBudget > 0 ? min(round(($monthSpending / $monthBudget) * 100), 100) : 0; @endphp
-        <div class="progress-bar">
-            <div class="progress-fill {{ $budgetPct > 80 ? 'red' : 'green' }}" style="width: {{ $budgetPct }}%"></div>
-        </div>
-        <div class="card-subtitle">{{ $budgetPct }}% of monthly budget used</div>
-    </div>
-
-    <div class="card stat-card green animate-in">
-        <div class="stat-icon">💰</div>
-        <div class="card-title">Today's Income</div>
-        <div class="card-value">Rp {{ number_format($todayIncome, 0, ',', '.') }}</div>
-        <div class="card-subtitle">Month total: Rp {{ number_format($monthSpending, 0, ',', '.') }} spent</div>
-    </div>
-
-    <div class="card stat-card orange animate-in">
-        <div class="stat-icon">🔥</div>
-        <div class="card-title">Calories Today</div>
-        <div class="card-value">{{ number_format($todayMacros['calories']) }}</div>
-        <div class="card-subtitle">of {{ number_format($calorieGoal) }} kcal goal</div>
-        @php $calPct = $calorieGoal > 0 ? min(round(($todayMacros['calories'] / $calorieGoal) * 100), 100) : 0; @endphp
-        <div class="progress-bar">
-            <div class="progress-fill {{ $calPct > 100 ? 'red' : 'orange' }}" style="width: {{ $calPct }}%"></div>
-        </div>
-        <div class="card-subtitle">{{ $calPct }}% of daily goal</div>
-    </div>
-
-    <div class="card stat-card blue animate-in">
-        <div class="stat-icon">💎</div>
-        <div class="card-title">Total Savings</div>
-        <div class="card-value">Rp {{ number_format($totalSavings, 0, ',', '.') }}</div>
-        @if($todayMood)
-            <div class="card-subtitle">Mood: {{ $todayMood->mood_emoji }} {{ ucfirst($todayMood->mood) }}</div>
-        @else
-            <div class="card-subtitle">No mood logged yet today</div>
-        @endif
-    </div>
-</div>
-
-<!-- Charts + Meals -->
-<div class="grid-2">
-    <!-- Macros Breakdown -->
-    <div class="card animate-in">
-        <div class="card-title">Today's Macros</div>
-        <div class="chart-container" style="height: 220px;">
-            <canvas id="macroChart"></canvas>
-        </div>
-    </div>
-
-    <!-- Today's Meals -->
-    <div class="card animate-in">
-        <div class="card-title">Today's Meals</div>
-        @if($todayMeals->count() > 0)
-            @foreach($todayMeals as $meal)
-                <div class="meal-item">
-                    <div class="meal-info">
-                        <h4>{{ $meal->food_name }}</h4>
-                        <p>{{ ucfirst($meal->meal_type ?? 'snack') }} · {{ $meal->serving_size ?? 1 }} {{ $meal->serving_unit ?? 'porsi' }}</p>
-                    </div>
-                    <div class="meal-cal">{{ $meal->calories ?? 0 }} kcal</div>
-                </div>
-            @endforeach
-        @else
-            <div class="empty-state">
-                <div class="empty-icon">🍽️</div>
-                <h3>No meals logged yet</h3>
-                <p>Send "makan nasi goreng" to your Butler bot!</p>
+<div class="stat-grid animate-in" style="animation-delay:.05s">
+    <div class="stat-card">
+        <div class="stat-label">Pengeluaran hari ini</div>
+        <div class="stat-value">Rp {{ number_format($todaySpend, 0, ',', '.') }}</div>
+        @if($user->daily_budget_idr)
+            @php $rem = $user->daily_budget_idr - $todaySpend; @endphp
+            <div class="stat-sub" style="color: {{ $rem >= 0 ? 'var(--success)' : 'var(--err)' }}">
+                {{ $rem >= 0 ? 'Sisa Rp ' . number_format($rem, 0, ',', '.') : 'Melebihi Rp ' . number_format(abs($rem), 0, ',', '.') }}
             </div>
         @endif
     </div>
-</div>
-
-<!-- Recent Transactions -->
-<div class="card animate-in">
-    <div class="card-title">Recent Transactions</div>
-    @if($recentTransactions->count() > 0)
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Description</th>
-                    <th>Category</th>
-                    <th style="text-align: right;">Amount</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach($recentTransactions as $tx)
-                    <tr>
-                        <td>{{ $tx->transaction_date->format('d M') }}</td>
-                        <td><span class="badge badge-{{ $tx->type }}">{{ $tx->type }}</span></td>
-                        <td>{{ $tx->description }}</td>
-                        <td>{{ $tx->category ?? '-' }}</td>
-                        <td style="text-align: right; font-weight: 600; color: {{ $tx->type === 'expense' ? 'var(--red)' : 'var(--green)' }};">
-                            {{ $tx->type === 'expense' ? '-' : '+' }}Rp {{ number_format($tx->amount, 0, ',', '.') }}
-                        </td>
-                    </tr>
-                @endforeach
-            </tbody>
-        </table>
+    @if($user->isCalorieMode())
+    <div class="stat-card">
+        <div class="stat-label">Kalori hari ini</div>
+        <div class="stat-value">{{ number_format($todayCalories, 0, ',', '.') }} <span style="font-size:14px;font-weight:400;color:var(--text-muted)">kcal</span></div>
+        @if($user->daily_calorie_goal)
+            @php $calRem = $user->daily_calorie_goal - $todayCalories; @endphp
+            <div class="stat-sub" style="color: {{ $calRem >= 0 ? 'var(--success)' : 'var(--warning)' }}">
+                {{ $calRem >= 0 ? 'Sisa ' . number_format($calRem) . ' kcal' : 'Lewat ' . number_format(abs($calRem)) . ' kcal' }}
+            </div>
+        @endif
+    </div>
     @else
-        <div class="empty-state">
-            <div class="empty-icon">📝</div>
-            <h3>No transactions yet</h3>
-            <p>Send "spent 50rb mie ayam" to start tracking!</p>
+    <div class="stat-card">
+        <div class="stat-label">Budget bulanan</div>
+        <div class="stat-value">
+            @if($user->monthly_budget_idr)
+                Rp {{ number_format($user->monthly_budget_idr, 0, ',', '.') }}
+            @else
+                <span style="color:var(--text-dim);font-size:16px">Belum diset</span>
+            @endif
         </div>
+    </div>
     @endif
 </div>
-@endsection
 
-@section('scripts')
-<script>
-    // Macros donut chart
-    const macroCtx = document.getElementById('macroChart');
-    if (macroCtx) {
-        new Chart(macroCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Protein', 'Carbs', 'Fat'],
-                datasets: [{
-                    data: [{{ $todayMacros['protein'] }}, {{ $todayMacros['carbs'] }}, {{ $todayMacros['fat'] }}],
-                    backgroundColor: ['#6c5ce7', '#ffa726', '#ff6b81'],
-                    borderWidth: 0,
-                    hoverOffset: 8,
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '70%',
-                plugins: {
-                    legend: {
-                        position: 'bottom',
-                        labels: { padding: 16, usePointStyle: true, pointStyle: 'circle' }
-                    }
-                }
-            }
-        });
-    }
-</script>
+@if($accounts->isNotEmpty())
+<div class="animate-in" style="animation-delay:.1s;margin-bottom:24px">
+    <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px">Akun</div>
+    <div class="table-wrap">
+        @foreach($accounts as $account)
+        <div class="account-row">
+            <div>
+                <div class="account-name">
+                    {{ $account->name }}
+                    @if($account->is_default_spending)<span class="default-badge">Utama</span>@endif
+                </div>
+                <div class="account-type">{{ ucfirst($account->type ?? 'Akun') }}</div>
+            </div>
+            <div class="account-balance">Rp {{ number_format($account->current_balance, 0, ',', '.') }}</div>
+        </div>
+        @endforeach
+    </div>
+</div>
+@endif
+
+<a href="{{ route('dashboard.history') }}"
+   class="animate-in"
+   style="animation-delay:.15s;display:flex;align-items:center;justify-content:space-between;padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);text-decoration:none;color:var(--text)">
+    <span style="font-weight:500">Lihat semua riwayat</span>
+    <span style="color:var(--text-dim)">→</span>
+</a>
+
 @endsection

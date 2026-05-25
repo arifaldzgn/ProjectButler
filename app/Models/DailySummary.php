@@ -7,23 +7,34 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class DailySummary extends Model
 {
-    /**
-     * Only created_at is stored (no updated_at column).
-     */
     const UPDATED_AT = null;
 
     protected $fillable = [
         'user_id',
         'summary_date',
         'summary_type',
+        // Finance
         'total_spent_idr',
-        'total_calories',
+        'total_income_idr',
+        'total_bills_paid',
         'total_saved_idr',
-        'entry_count',
         'budget_remaining',
+        'free_balance_eod',
+        // Calories
+        'total_calories',
+        'calorie_goal',
+        'calorie_status',
+        // Funds & upcoming
+        'funds_snapshot',
+        'bills_due_this_week',
+        'debts_due_this_week',
+        // Engagement
+        'entry_count',
         'streak_at_time',
+        // AI
         'ai_generated_text',
         'ai_prompt_version',
+        // Delivery
         'was_delivered',
         'delivered_at',
         'delivery_error',
@@ -35,6 +46,9 @@ class DailySummary extends Model
             'summary_date' => 'date',
             'was_delivered' => 'boolean',
             'delivered_at' => 'datetime',
+            'funds_snapshot' => 'array',
+            'bills_due_this_week' => 'array',
+            'debts_due_this_week' => 'array',
         ];
     }
 
@@ -42,8 +56,6 @@ class DailySummary extends Model
     {
         return $this->belongsTo(User::class);
     }
-
-    // ── Scopes ─────────────────────────────────────────────────────────
 
     public function scopeForUser($query, int $userId)
     {

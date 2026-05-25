@@ -12,7 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        $middleware->trustProxies(at: '*');
+        $middleware->alias([
+            'dashboard.session' => \App\Http\Middleware\DashboardSession::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

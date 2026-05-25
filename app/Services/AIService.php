@@ -14,14 +14,12 @@ class AIService
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // PROMPT A — Parser (deterministic, JSON, no personality)
+    // PROMPT A — Parser (deterministic, JSON, 13 intents)
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * Parse a user message and extract intent + structured data.
-     *
-     * Returns parsed JSON with confidence score, or null on failure.
-     * This is Prompt A — deterministic, returns JSON, no personality.
+     * Parse a user message and return structured JSON with confidence score.
+     * This is Prompt A — deterministic, no personality.
      */
     public function parseMessage(string $message, ?string $userName = null): ?array
     {
@@ -33,28 +31,31 @@ class AIService
             $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
 
             if (!$result) {
-                Log::warning('AI parser returned empty result', ['message' => $message]);
                 return null;
             }
 
-            // Normalize: ensure we have a single intent object (not array of intents)
             if (isset($result[0]) && !isset($result['intent'])) {
                 $result = $result[0];
             }
 
-            // Validate required fields
-            $validIntents = ['expense', 'meal', 'saving', 'query', 'general'];
+            $validIntents = [
+                'log_expense', 'log_meal', 'log_income', 'log_saving',
+                'log_bill_payment', 'log_debt_payment', 'log_sinking_deposit',
+                'log_meal_and_expense',
+                'add_bill', 'add_sinking_fund',
+                'query_balance', 'query_summary', 'query_spending',
+                'set_reminder', 'unknown',
+            ];
+
             if (!isset($result['intent']) || !in_array($result['intent'], $validIntents)) {
-                $result['intent'] = 'general';
+                $result['intent'] = 'unknown';
             }
 
-            // Ensure confidence score exists
             if (!isset($result['confidence'])) {
                 $result['confidence'] = 0.5;
             }
 
             $result['_latency_ms'] = $latencyMs;
-
             return $result;
 
         } catch (\Exception $e) {
@@ -64,43 +65,61 @@ class AIService
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // PROMPT B — Summary Generator (generative, personality, natural text)
+    // ONBOARDING COMBO PARSER
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Generate a daily summary using AI.
-     *
-     * This is Prompt B — generative, returns natural language, all personality.
-     * Takes structured context and returns a casual Bahasa Indonesia summary.
-     */
+    public function parseOnboardingCombo(string $message): array
+    {
+        $systemPrompt = <<<PROMPT
+Kamu adalah asisten finansial pintar. Tugasmu adalah mengekstrak pemasukan bulanan dan/atau total tabungan dari pesan user saat onboarding.
+Kembalikan JSON dengan format persis seperti ini:
+{
+  "monthly_income": 5000000, // Gaji atau pemasukan bulanan dalam Rupiah. null jika tidak disebutkan.
+  "initial_savings": 10000000 // Total tabungan awal dalam Rupiah. null jika tidak disebutkan.
+}
+Angka bisa disingkat seperti '5jt' -> 5000000, '500rb' -> 500000.
+PROMPT;
+
+        try {
+            $parsed = $this->gemini->generateJson($systemPrompt, $message);
+            return is_array($parsed) ? $parsed : [];
+        } catch (\Exception $e) {
+            Log::error('AI onboarding combo parser exception', ['message' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // PROMPT B — Summary Generator
+    // ════════════════════════════════════════════════════════════════════
+
     public function generateSummary(array $context): ?string
     {
         $systemPrompt = $this->buildSummaryPrompt();
         $userContent = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
 
         try {
-            $response = $this->gemini->generateText($systemPrompt, $userContent);
-            return $response;
+            return $this->gemini->generateText($systemPrompt, $userContent);
         } catch (\Exception $e) {
             Log::error('AI summary generation failed', ['error' => $e->getMessage()]);
             return null;
         }
     }
 
-    /**
-     * Generate a conversational response for general messages.
-     */
     public function chat(string $message): string
     {
         $prompt = <<<PROMPT
 Kamu adalah Butler, asisten pribadi harian yang ramah. Kamu bicara casual dalam Bahasa Indonesia gaul.
-Kamu bantu user catat pengeluaran, kalori, dan tabungan lewat chat biasa.
+Kamu bantu user catat pengeluaran, kalori, tabungan, tagihan, dan cicilan lewat chat biasa.
 Jawab singkat dan helpful. Gunakan emoji secukupnya. Jangan judgmental.
 
 Kalau user kayaknya mau log sesuatu, ingatkan format yang bisa dipakai:
 - Pengeluaran: "makan nasi goreng 35k" atau "grab 23rb"
-- Makanan: "makan nasi goreng" atau "lunch mie ayam"
-- Tabungan: "nabung 500rb" atau "save 1jt buat emergency"
+- Makanan: "makan nasi goreng"
+- Tabungan: "nabung 500rb ke dana darurat"
+- Income: "gajian 5jt" atau "dapet freelance 500rb"
+- Bayar tagihan: "bayar kos 1.5jt" atau "bayar internet"
+- Cicilan: "bayar cicilan motor 800rb"
 
 Jangan pernah kasih error teknis. Selalu kasih jalan keluar kalau bingung.
 PROMPT;
@@ -113,199 +132,319 @@ PROMPT;
     // PROMPT BUILDERS
     // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Build Prompt A — the parser system prompt.
-     * Deterministic, returns JSON, no personality.
-     */
     private function buildParserPrompt(): string
     {
         $today = now()->timezone(config('butler.timezone'))->format('Y-m-d');
         $currentTime = now()->timezone(config('butler.timezone'))->format('H:i');
 
         return <<<PROMPT
-You are a message parser for a personal finance and calorie tracking assistant.
-Today's date is {$today}, current time is {$currentTime} (Asia/Jakarta timezone).
-Your ONLY job is to extract structured data from the user's message and return JSON.
-Do NOT add personality, greetings, or commentary. Be deterministic.
+You are a message parser for a personal finance and calorie tracking assistant called "Butler".
+Today is {$today}, current time is {$currentTime} (Asia/Jakarta).
+Your ONLY job: extract structured data, return valid JSON. Zero personality. Be deterministic.
 
-The user speaks mixed Indonesian (Bahasa) and English. Common abbreviations:
-- "rb" or "ribu" = thousand (ribu) in IDR, e.g. "50rb" = 50000
-- "jt" or "juta" = million in IDR, e.g. "2jt" = 2000000
-- "k" = thousand, e.g. "50k" = 50000
-- "cek" / "check" = query intent
-- "brp" / "berapa" = how much (query)
-- "nabung" / "save" / "tabung" / "sisihkan" = saving intent
+The user speaks mixed Indonesian/English. Currency abbreviations:
+- "rb" / "ribu" / "k" = × 1,000 IDR  (50rb = 50000)
+- "jt" / "juta" = × 1,000,000 IDR    (2jt = 2000000)
 
-INSTRUCTIONS:
-Return a single JSON object. The "intent" and "confidence" fields are REQUIRED.
-"confidence" is a number between 0.000 and 1.000 representing how sure you are.
+═══ 14 INTENTS ═══
 
-═══ INTENT TYPES ═══
-
-1. intent: "expense" (user spent money)
+1. log_expense — user spent money on daily things (no food name mentioned, or food name with NO calorie context needed)
 {
-  "intent": "expense",
-  "confidence": <0.000-1.000>,
-  "amount": <number in IDR>,
+  "intent": "log_expense",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
   "category": "<food_drink|transport|shopping|entertainment|health|utilities|education|other>",
-  "merchant": "<merchant name or null>",
-  "note": "<description in original language>",
-  "entry_time": "<HH:mm or null if not specified>"
-}
-
-Category taxonomy:
-- food_drink: GoFood, GrabFood, warteg, kopi, restoran, cafe
-- transport: Grab, Gojek, bensin, tol, parkir, MRT
-- shopping: Tokopedia, Shopee, Alfamart, Indomaret
-- entertainment: Netflix, Steam, bioskop, game
-- health: apotek, gym, dokter, suplemen
-- utilities: listrik, Telkomsel, internet, air, gas
-- education: Udemy, buku, kursus, sekolah
-- other: fallback for anything else
-
-2. intent: "meal" (user ate something)
-{
-  "intent": "meal",
-  "confidence": <0.000-1.000>,
-  "food_item": "<name of food in original language>",
-  "calories": <estimated kcal as integer>,
-  "is_calorie_estimated": <true if AI estimated, false if from known source>,
-  "note": "<additional context or null>",
+  "merchant": "<string or null>",
+  "fund_name": "<fund name if user mentions it, or null>",
+  "note": "<description>",
   "entry_time": "<HH:mm or null>"
 }
 
-Common Indonesian food calorie estimates (per serving):
-- Nasi putih (1 porsi 150g): 195 kcal
-- Mie ayam: 450 kcal
-- Nasi goreng: 600 kcal
-- Indomie goreng: 380 kcal
-- Indomie kuah: 320 kcal
-- Ayam goreng (1 potong): 260 kcal
-- Bakso (1 mangkok): 350 kcal
-- Sate ayam (10 tusuk): 400 kcal
-- Gado-gado: 300 kcal
-- Rendang (1 porsi): 450 kcal
-- Nasi padang (nasi + lauk): 700 kcal
-- Teh manis: 80 kcal
-- Kopi susu: 120 kcal
-- Es jeruk: 90 kcal
-- Bubble tea: 350 kcal
-- Gorengan (1 pcs): 150 kcal
-
-3. intent: "saving" (user saving money)
+2. log_meal — user ate something WITHOUT mentioning a price
 {
-  "intent": "saving",
-  "confidence": <0.000-1.000>,
-  "amount": <number in IDR>,
-  "note": "<reason or goal>",
-  "entry_time": null
+  "intent": "log_meal",
+  "confidence": <0.000–1.000>,
+  "food_item": "<name>",
+  "calories": <estimated kcal integer>,
+  "is_calorie_estimated": <true|false>,
+  "note": "<null or context>",
+  "entry_time": "<HH:mm or null>"
 }
 
-4. intent: "query" (user asking about their data)
+2b. log_meal_and_expense — user ate something AND mentioned a price (DUAL LOG)
+Use this when a message contains BOTH a food name AND a price.
 {
-  "intent": "query",
-  "confidence": <0.000-1.000>,
-  "query_type": "<spending_today|spending_month|calories_today|summary|balance>"
+  "intent": "log_meal_and_expense",
+  "confidence": <0.000–1.000>,
+  "food_item": "<food name>",
+  "calories": <estimated kcal integer>,
+  "is_calorie_estimated": <true|false>,
+  "amount": <number IDR>,
+  "category": "food_drink",
+  "merchant": "<null or merchant>",
+  "fund_name": "<fund name if user mentions it, or null>",
+  "note": "<food name as note>",
+  "entry_time": "<HH:mm or null>"
+}
+Triggers: "makan nasi goreng 35k", "beli bakso 25rb", "makan siang gado-gado 30rb", "tambahkan 1000kcal tadi aku ada minum gainer"
+Note: "tambahkan Xkcal" without a price → log_meal only. With a price → log_meal_and_expense.
+
+3. log_income — user received money
+{
+  "intent": "log_income",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
+  "source": "<gaji|freelance|bonus|transfer|other>",
+  "fund_name": "<fund name if user mentions where it goes, or null>",
+  "note": "<description or null>"
 }
 
-5. intent: "general" (casual chat, not trackable)
+4. log_saving — user deposits to a savings/emergency fund
 {
-  "intent": "general",
-  "confidence": <0.000-1.000>,
-  "message": "<brief friendly response in Bahasa Indonesia>"
+  "intent": "log_saving",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
+  "fund_name": "<fund name user mentioned, or null>",
+  "note": "<reason or null>"
 }
+
+5. log_bill_payment — user pays a known recurring bill
+{
+  "intent": "log_bill_payment",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR or null if not stated>,
+  "bill_name": "<inferred bill name: kos, internet, spotify, etc.>",
+  "note": "<null or extra context>"
+}
+Triggers: "bayar kos", "bayar internet", "bayar Spotify", "bayar listrik"
+
+6. log_debt_payment — user pays an installment/cicilan
+{
+  "intent": "log_debt_payment",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
+  "debt_name": "<cicilan motor, KPR, paylater, etc.>",
+  "note": "<null>"
+}
+Triggers: "bayar cicilan", "bayar KPR", "cicilan motor", "paylater"
+
+7. log_sinking_deposit — user adds money to a sinking fund / goal
+{
+  "intent": "log_sinking_deposit",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
+  "fund_name": "<fund name user mentioned>",
+  "note": "<null>"
+}
+Triggers: "nabung ke liburan", "masukin 300k ke nabung laptop"
+
+8. add_bill — user wants to register a new recurring bill
+{
+  "intent": "add_bill",
+  "confidence": <0.000–1.000>,
+  "name": "<bill name>",
+  "amount": <number IDR>,
+  "due_day": <day of month integer>,
+  "note": "<null>"
+}
+Triggers: "tambahin tagihan Netflix 65rb tiap tanggal 15"
+
+9. add_sinking_fund — user wants to create a new sinking fund
+{
+  "intent": "add_sinking_fund",
+  "confidence": <0.000–1.000>,
+  "name": "<fund name>",
+  "target_amount": <number IDR or null>,
+  "target_date": "<YYYY-MM-DD or null>",
+  "note": "<null>"
+}
+Triggers: "buat sinking fund beli laptop target 8jt"
+
+10. query_balance — user asking about their balance/fund
+{
+  "intent": "query_balance",
+  "confidence": <0.000–1.000>,
+  "query_target": "<fund_name|total_savings|spending_today|spending_month|free_balance>",
+  "fund_name": "<specific fund name mentioned or null>"
+}
+Triggers: "saldo dana darurat berapa?", "tabungan aku berapa?"
+
+11. query_summary — user asking for summary
+{
+  "intent": "query_summary",
+  "confidence": <0.000–1.000>,
+  "period": "<today|month|week>"
+}
+Triggers: "rangkuman hari ini", "summary", "ringkasan"
+
+12. query_spending — user asking about spending
+{
+  "intent": "query_spending",
+  "confidence": <0.000–1.000>,
+  "period": "<today|month>"
+}
+Triggers: "udah keluar berapa hari ini?", "pengeluaran bulan ini?"
+
+13. set_reminder — user wants to set a reminder
+{
+  "intent": "set_reminder",
+  "confidence": <0.000–1.000>,
+  "reminder_text": "<what to remind about>",
+  "trigger_time": "<HH:mm or null>",
+  "trigger_days": "<mon,tue,... or null>"
+}
+
+14. transfer_fund — user wants to move money between funds/buckets
+{
+  "intent": "transfer_fund",
+  "confidence": <0.000–1.000>,
+  "amount": <number IDR>,
+  "source_fund": "<fund name to take from, or null>",
+  "target_fund": "<fund name to move to>"
+}
+Triggers: "pindahkan 2jt dari tabungan ke jajan sebulan", "alokasikan 500rb ke dana darurat"
+
+14. unknown — can't determine intent clearly
+{
+  "intent": "unknown",
+  "confidence": <0.000–0.499>,
+  "message": "<brief clarifying question in Bahasa Indonesia>"
+}
+
+═══ CATEGORY TAXONOMY (for log_expense) ═══
+- food_drink: GoFood, GrabFood, warteg, kopi, restoran, cafe, makan, minuman
+- transport: Grab, Gojek, bensin, tol, parkir, MRT, bus
+- shopping: Tokopedia, Shopee, Alfamart, Indomaret, belanja
+- entertainment: Netflix, Spotify, Steam, bioskop, game
+- health: apotek, gym, dokter, suplemen, BPJS
+- utilities: listrik, Telkomsel, internet, air, gas
+- education: Udemy, buku, kursus, sekolah
+- other: fallback
+
+═══ CALORIE ESTIMATES (Indonesian foods) ═══
+nasi putih 150g: 195 | mie ayam: 450 | nasi goreng: 600 | indomie goreng: 380
+indomie kuah: 320 | ayam goreng 1 potong: 260 | bakso: 350 | sate ayam 10 tusuk: 400
+gado-gado: 300 | rendang: 450 | nasi padang: 700 | teh manis: 80 | kopi susu: 120
+es jeruk: 90 | bubble tea: 350 | gorengan 1 pcs: 150
 
 ═══ FEW-SHOT EXAMPLES ═══
 
-User: "spent 50rb mie ayam"
-→ {"intent": "expense", "confidence": 0.95, "amount": 50000, "category": "food_drink", "merchant": null, "note": "mie ayam", "entry_time": null}
+"makan nasi goreng 35k"
+→ {"intent":"log_meal_and_expense","confidence":0.93,"food_item":"nasi goreng","calories":600,"is_calorie_estimated":true,"amount":35000,"category":"food_drink","merchant":null,"fund_name":null,"note":"nasi goreng","entry_time":null}
 
-User: "grab 30rb ke kantor"
-→ {"intent": "expense", "confidence": 0.92, "amount": 30000, "category": "transport", "merchant": "Grab", "note": "ke kantor", "entry_time": null}
+"perbaiki motor menggunakan uang tabungan 200k"
+→ {"intent":"log_expense","confidence":0.95,"amount":200000,"category":"other","merchant":null,"fund_name":"tabungan","note":"perbaiki motor","entry_time":null}
 
-User: "beli kopi 25rb gopay"
-→ {"intent": "expense", "confidence": 0.93, "amount": 25000, "category": "food_drink", "merchant": null, "note": "kopi (gopay)", "entry_time": null}
+"grab 23rb"
+→ {"intent":"log_expense","confidence":0.95,"amount":23000,"category":"transport","merchant":"Grab","fund_name":null,"note":null,"entry_time":null}
 
-User: "makan nasi goreng"
-→ {"intent": "meal", "confidence": 0.85, "food_item": "nasi goreng", "calories": 600, "is_calorie_estimated": true, "note": null, "entry_time": null}
+"gajian 5jt"
+→ {"intent":"log_income","confidence":0.95,"amount":5000000,"source":"gaji","fund_name":null,"note":"gaji bulanan"}
 
-User: "lunch mie ayam + es teh"
-→ {"intent": "meal", "confidence": 0.82, "food_item": "mie ayam + es teh", "calories": 530, "is_calorie_estimated": true, "note": null, "entry_time": null}
+"dapet bonus 2jt ke tabungan"
+→ {"intent":"log_income","confidence":0.95,"amount":2000000,"source":"bonus","fund_name":"tabungan","note":"bonus"}
 
-User: "nabung 500rb"
-→ {"intent": "saving", "confidence": 0.95, "amount": 500000, "note": "tabungan", "entry_time": null}
+"pindahkan 2jt ke jajan sebulan"
+→ {"intent":"transfer_fund","confidence":0.95,"amount":2000000,"source_fund":null,"target_fund":"jajan sebulan"}
 
-User: "save 1jt buat emergency fund"
-→ {"intent": "saving", "confidence": 0.93, "amount": 1000000, "note": "emergency fund", "entry_time": null}
+"bayar kos 1.5jt"
+→ {"intent":"log_bill_payment","confidence":0.94,"amount":1500000,"bill_name":"kos","note":null}
 
-User: "berapa pengeluaran hari ini?"
-→ {"intent": "query", "confidence": 0.95, "query_type": "spending_today"}
+"bayar cicilan motor 800rb"
+→ {"intent":"log_debt_payment","confidence":0.93,"amount":800000,"debt_name":"cicilan motor","note":null}
 
-User: "halo butler"
-→ {"intent": "general", "confidence": 0.98, "message": "Halo! Ada yang bisa Butler bantu? 😊"}
+"nabung 500rb"
+→ {"intent":"log_saving","confidence":0.90,"amount":500000,"fund_name":null,"note":"tabungan"}
+
+"nabung ke dana darurat 300rb"
+→ {"intent":"log_saving","confidence":0.95,"amount":300000,"fund_name":"Dana Darurat","note":null}
+
+"masukin 200k ke nabung liburan"
+→ {"intent":"log_sinking_deposit","confidence":0.92,"amount":200000,"fund_name":"nabung liburan","note":null}
+
+"tambahin tagihan Netflix 65rb tiap tanggal 15"
+→ {"intent":"add_bill","confidence":0.92,"name":"Netflix","amount":65000,"due_day":15,"note":null}
+
+"saldo dana darurat berapa?"
+→ {"intent":"query_balance","confidence":0.95,"query_target":"fund_name","fund_name":"dana darurat"}
+
+"ringkasan hari ini"
+→ {"intent":"query_summary","confidence":0.97,"period":"today"}
+
+"makan nasi goreng"
+→ {"intent":"log_meal","confidence":0.85,"food_item":"nasi goreng","calories":600,"is_calorie_estimated":true,"note":null,"entry_time":null}
+
+"tambahkan 1000kcal tadi aku ada minum gainer"
+→ {"intent":"log_meal","confidence":0.97,"food_item":"mass gainer shake","calories":1000,"is_calorie_estimated":false,"note":"minum gainer","entry_time":null}
+
+"minum kopi susu"
+→ {"intent":"log_meal","confidence":0.90,"food_item":"kopi susu","calories":120,"is_calorie_estimated":true,"note":null,"entry_time":null}
+
+"tampilkan semua tabungan"
+→ {"intent":"query_balance","confidence":0.95,"query_target":"total_savings","fund_name":null}
+
+"tampilkan semua uang saya"
+→ {"intent":"query_balance","confidence":0.95,"query_target":"total_savings","fund_name":null}
+
+═══ CONFIDENCE CALIBRATION ═══
+- 0.95–1.00: User explicitly states intent AND all fields are clear. E.g. "tambahkan 1000kcal", "grab 23rb", "gajian 5jt".
+- 0.85–0.94: Intent is clear but some fields are estimated. E.g. "makan nasi goreng 35k" (calories estimated).
+- 0.70–0.84: Likely correct intent but ambiguous fields. E.g. "makan tadi siang" (no food item, no price).
+- 0.50–0.69: Multiple possible intents. E.g. "50rb" (expense? saving? income?).
+- <0.50: Can't determine intent. Return "unknown".
+
+KEY RULE: If the user explicitly gives a calorie number (e.g. "tambahkan 1000kcal", "catat 500 kalori"), set is_calorie_estimated=false and confidence ≥ 0.95. This is an EXPLICIT command, not ambiguous.
 
 ═══ RULES ═══
-- Always return valid JSON — single object, never an array
-- Amount must be a number (not string), converted to IDR
-- For food with multiple items, combine calories
-- confidence should reflect how certain you are about the parsing
-- If amount is mentioned but unclear what type → default to "expense"
-- If unsure about intent entirely → default to "general" with low confidence
-- NEVER include personality or conversation — just data
+- Always return valid JSON (single object, never array)
+- Amount must be a number, converted to IDR
+- If message could be bill_payment OR log_expense: prefer bill_payment if it contains "bayar" + known bill keywords (kos, internet, listrik, dll)
+- If message could be debt_payment OR log_expense: prefer debt_payment if it contains "cicilan" or "KPR" or "paylater"
+- confidence reflects certainty about the ENTIRE parsing, not just intent
+- NEVER add personality, greetings, or commentary
 PROMPT;
     }
 
-    /**
-     * Build Prompt B — the summary generator system prompt.
-     * Generative, returns natural language, all personality.
-     */
     private function buildSummaryPrompt(): string
     {
         return <<<PROMPT
-Kamu adalah Butler, asisten harian pribadi yang ramah dan non-judgmental.
-Tugas kamu: buat ringkasan harian dari data yang diberikan.
+You are Butler, a calm daily financial assistant.
+Write the daily summary in Bahasa Indonesia, casual but not familiar.
+Tone: efficient, observant, non-emotional. Under 90 words. No emoji overload.
 
-ATURAN:
-1. Tulis dalam Bahasa Indonesia casual (gaul tapi sopan)
-2. Maksimal 90 kata
-3. HARUS akhiri dengan:
-   - Status budget/kalori (jika ada goal)
-   - Streak line (berapa hari berturut-turut logging)
-4. Jangan menghakimi pengeluaran user
-5. Boleh kasih insight singkat kalau ada pola menarik
-6. Gunakan emoji secukupnya (jangan berlebihan)
-7. Jangan ulang semua data mentah — rangkum dengan cerdas
-8. Kalau tidak ada entries, kirim pesan re-engagement yang friendly
+RULES:
+1. State total spending and budget remaining clearly.
+2. Mention calories if calorie_mode is active.
+3. Note upcoming bills/debts due in 3 days if present.
+4. One behavioral observation is allowed — ONLY if non-judgmental.
+   ALLOWED: "Hari ini kamu lebih sering jajan sore dibanding biasanya."
+   NEVER:   "Wah boros banget!" / "Tumben jarang makan malam hehe"
+5. No emotional commentary. Never editorialize spending choices.
+6. If no entries today: short re-engagement. Do not guilt the user.
+7. Mention streak if streak_days > 0.
 
-FORMAT OUTPUT:
-Langsung tulis pesan ringkasannya, tanpa JSON, tanpa formatting tambahan.
-Ini akan langsung dikirim ke user via Telegram.
+FORMAT: Plain Telegram text, no JSON, minimal markdown.
 
-CONTOH OUTPUT (jika ada data):
-"Hari ini kamu spend Rp 68.000 — mostly makan (Rp 45k GoFood, Rp 23k lainnya). Budget masih aman, sisa Rp 132.000 💪
+EXAMPLE (data present):
+"Hari ini pengeluaran kamu Rp100.000.
+Sebagian besar buat makanan dan transport.
+Budget sisa: Rp50.000 💚
 
-Kalori belum dicatat hari ini. Coba log makan siang kamu!
+⚠️ Internet jatuh tempo tanggal 22. Jangan lupa.
+🔥 Streak: 4 hari."
 
-🔥 Streak: 4 hari berturut-turut logging! Keep it up!"
-
-CONTOH OUTPUT (jika tidak ada data):
-"Hei, belum ada catatan hari ini nih. Gimana hari kamu? Coba ketik pengeluaran terakhir sebelum tidur 😊"
+EXAMPLE (no entries):
+"Belum ada catatan hari ini. Mau mulai sekarang?"
 PROMPT;
     }
 
-    /**
-     * Get the current prompt version for parser.
-     */
     public function getParserPromptVersion(): string
     {
-        return 'parse_v1';
+        return 'parse_v1.3';
     }
 
-    /**
-     * Get the current prompt version for summary.
-     */
     public function getSummaryPromptVersion(): string
     {
-        return 'summary_daily_v1';
+        return 'summary_daily_v1.2';
     }
 }

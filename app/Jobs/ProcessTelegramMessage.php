@@ -42,7 +42,7 @@ class ProcessTelegramMessage implements ShouldQueue
 
         try {
             $router->handle($user, $this->chatId, $this->message);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('ProcessTelegramMessage failed', [
                 'user_id' => $this->userId,
                 'error' => $e->getMessage(),

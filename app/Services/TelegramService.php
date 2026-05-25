@@ -9,11 +9,25 @@ class TelegramService
 {
     private string $token;
     private string $baseUrl;
+    private ?string $debugContext = null;
 
     public function __construct()
     {
         $this->token = config('butler.telegram.bot_token');
         $this->baseUrl = "https://api.telegram.org/bot{$this->token}";
+    }
+
+    public function setDebugContext(?string $context): void
+    {
+        $this->debugContext = $context;
+    }
+
+    private function applyDebugContext(string &$text): void
+    {
+        if ($this->debugContext) {
+            $text .= "\n\n" . $this->debugContext;
+            $this->debugContext = null; // Consume it so it only attaches to the first outgoing message
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -26,6 +40,7 @@ class TelegramService
      */
     public function sendMessage(string $chatId, string $text, ?string $parseMode = 'Markdown'): bool
     {
+        $this->applyDebugContext($text);
         return $this->sendWithRetry($chatId, $text, $parseMode);
     }
 
@@ -41,15 +56,20 @@ class TelegramService
         array $buttons,
         ?string $parseMode = 'Markdown'
     ): ?int {
+        $this->applyDebugContext($text);
         $keyboard = ['inline_keyboard' => [$buttons]];
 
+        $payload = [
+            'chat_id' => $chatId,
+            'text' => $text,
+            'reply_markup' => json_encode($keyboard),
+        ];
+        if ($parseMode) {
+            $payload['parse_mode'] = $parseMode;
+        }
+
         try {
-            $response = Http::post("{$this->baseUrl}/sendMessage", [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'parse_mode' => $parseMode,
-                'reply_markup' => json_encode($keyboard),
-            ]);
+            $response = Http::post("{$this->baseUrl}/sendMessage", $payload);
 
             if (!$response->successful()) {
                 // Retry without parse mode (Markdown might be broken)
@@ -66,6 +86,39 @@ class TelegramService
             return $response->json('result.message_id');
         } catch (\Exception $e) {
             Log::error('Telegram keyboard exception', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Send a multi-row inline keyboard (e.g. fund selection during onboarding).
+     * Buttons are arranged 2 per row.
+     */
+    public function sendFundSelectionKeyboard(string $chatId, string $text, array $buttons): ?int
+    {
+        $this->applyDebugContext($text);
+        $rows = array_chunk($buttons, 2);
+        $keyboard = ['inline_keyboard' => $rows];
+
+        try {
+            $response = Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'parse_mode' => 'Markdown',
+                'reply_markup' => json_encode($keyboard),
+            ]);
+
+            if (!$response->successful()) {
+                $response = Http::post("{$this->baseUrl}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $text,
+                    'reply_markup' => json_encode($keyboard),
+                ]);
+            }
+
+            return $response->json('result.message_id');
+        } catch (\Exception $e) {
+            Log::error('Telegram sendFundSelectionKeyboard exception', ['message' => $e->getMessage()]);
             return null;
         }
     }
@@ -116,6 +169,41 @@ class TelegramService
         }
     }
 
+    /**
+     * Edit an existing message text and replace its inline keyboard.
+     */
+    public function editMessageWithKeyboard(
+        string $chatId,
+        int $messageId,
+        string $text,
+        array $buttons,
+        ?string $parseMode = 'Markdown'
+    ): bool {
+        $this->applyDebugContext($text);
+        $keyboard = ['inline_keyboard' => $buttons];
+        try {
+            $payload = [
+                'chat_id' => $chatId,
+                'message_id' => $messageId,
+                'text' => $text,
+                'parse_mode' => $parseMode,
+                'reply_markup' => json_encode($keyboard),
+            ];
+
+            $response = Http::post("{$this->baseUrl}/editMessageText", $payload);
+
+            if (!$response->successful() && $parseMode) {
+                $payload['parse_mode'] = null;
+                $response = Http::post("{$this->baseUrl}/editMessageText", $payload);
+            }
+
+            return $response->successful();
+        } catch (\Exception $e) {
+            Log::error('Telegram editMessageWithKeyboard failed', ['message' => $e->getMessage()]);
+            return false;
+        }
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // CONFIRMATION INLINE KEYBOARDS
     // ════════════════════════════════════════════════════════════════════
@@ -132,6 +220,85 @@ class TelegramService
         ];
     }
 
+    /**
+     * Build a single [↩ Undo] button for a confirmed entry.
+     * Embedded in the confirmation message.
+     */
+    public function buildUndoButton(string $undoToken): array
+    {
+        return [['text' => '↩ Undo', 'callback_data' => "undo:{$undoToken}"]];
+    }
+
+    /**
+     * Send a message with an account selection inline keyboard.
+     * Used when interaction_mode = needs_clarification.
+     *
+     * @param  string  $chatId
+     * @param  int     $entryId
+     * @param  array   $accounts   [ ['id' => 1, 'name' => 'GoPay'], ... ]
+     */
+    public function sendAccountSelectionKeyboard(
+        string $chatId,
+        int $entryId,
+        array $accounts
+    ): ?int {
+        $buttons = [];
+        foreach ($accounts as $account) {
+            $buttons[] = [
+                'text'          => $account['name'],
+                'callback_data' => "acct_sel:{$entryId}:{$account['id']}",
+            ];
+        }
+
+        // 3 buttons per row
+        $rows = array_chunk($buttons, 3);
+
+        $keyboard = ['inline_keyboard' => $rows];
+
+        try {
+            $response = Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id'      => $chatId,
+                'text'         => 'Pakai akun yang mana?',
+                'reply_markup' => json_encode($keyboard),
+            ]);
+            return $response->json('result.message_id');
+        } catch (\Exception $e) {
+            Log::error('Telegram sendAccountSelectionKeyboard failed', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Send the consent gate question when behavioral confidence crosses 0.80.
+     * Strict format per v2.1 spec: no emoji overload, no emotional phrasing.
+     */
+    public function sendConsentGate(
+        string $chatId,
+        string $subject,
+        string $accountName,
+        string $domain,
+        string $domainSubject
+    ): void {
+        $text = "Aku lihat kamu biasanya pakai {$accountName} buat {$subject}.\nMau aku otomatisin ke depannya?";
+        $buttons = [
+            [
+                ['text' => 'Boleh', 'callback_data' => "consent_yes:{$domain}:{$domainSubject}"],
+                ['text' => 'Jangan', 'callback_data' => "consent_no:{$domain}:{$domainSubject}"],
+            ]
+        ];
+        $keyboard = ['inline_keyboard' => $buttons];
+
+        try {
+            Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id'      => $chatId,
+                'text'         => $text,
+                'reply_markup' => json_encode($keyboard),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Telegram sendConsentGate failed', ['message' => $e->getMessage()]);
+        }
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // MESSAGE FORMATTING
     // ════════════════════════════════════════════════════════════════════
@@ -146,6 +313,7 @@ class TelegramService
         $category = $parsed['category'] ?? 'other';
         $merchant = $parsed['merchant'] ?? null;
         $note = $parsed['note'] ?? '-';
+        $fundName = $parsed['fund_name'] ?? null;
         $emoji = $this->getCategoryEmoji($category);
         $categoryLabel = $this->getCategoryLabel($category);
 
@@ -155,6 +323,9 @@ class TelegramService
 
         if ($merchant) {
             $msg .= "🏪 Merchant: {$merchant}\n";
+        }
+        if ($fundName) {
+            $msg .= "🏦 Sumber Dana: {$fundName}\n";
         }
 
         $msg .= "📝 {$note}\n";
@@ -201,23 +372,195 @@ class TelegramService
     {
         $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
         $note = $parsed['note'] ?? 'Tabungan';
+        $fundName = $parsed['fund_name'] ?? null;
 
-        return "💎 *Tabungan terdeteksi:*\n\n"
+        $msg = "💎 *Tabungan terdeteksi:*\n\n"
             . "💰 Rp {$amount}\n"
             . "📝 {$note}\n";
+
+        if ($fundName) {
+            $msg .= "📁 Dana: {$fundName}\n";
+        }
+
+        return $msg;
+    }
+
+    /**
+     * Format income confirmation message.
+     */
+    public function formatIncomeConfirmation(array $parsed, float $confidence): string
+    {
+        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $source = $parsed['source'] ?? 'income';
+        $fundName = $parsed['fund_name'] ?? null;
+        $sourceLabel = match($source) {
+            'gaji' => '💼 Gaji',
+            'freelance' => '💻 Freelance',
+            'bonus' => '🎁 Bonus',
+            'transfer' => '💸 Transfer',
+            default => '💰 Income',
+        };
+
+        $msg = "💰 *Income terdeteksi:*\n\n"
+            . "{$sourceLabel}: Rp {$amount}\n";
+
+        if ($fundName) {
+            $msg .= "📥 Masuk Ke: {$fundName}\n";
+        }
+
+        if ($confidence < 0.75) {
+            $msg .= "\n⚠️ _Butler kurang yakin. Cek dulu ya!_";
+        }
+
+        return $msg;
+    }
+
+    /**
+     * Format bill payment confirmation.
+     */
+    public function formatBillPaymentConfirmation(array $parsed, float $confidence): string
+    {
+        $billName = $parsed['bill_name'] ?? 'Tagihan';
+        $amount = isset($parsed['amount']) ? 'Rp ' . number_format($parsed['amount'], 0, ',', '.') : '(nominal tidak disebutkan)';
+
+        $msg = "🧾 *Pembayaran tagihan terdeteksi:*\n\n"
+            . "📋 {$billName}\n"
+            . "💰 {$amount}\n";
+
+        if ($confidence < 0.75) {
+            $msg .= "\n⚠️ _Butler kurang yakin. Cek dulu ya!_";
+        }
+
+        return $msg;
+    }
+
+    /**
+     * Format debt payment confirmation.
+     */
+    public function formatDebtPaymentConfirmation(array $parsed, float $confidence): string
+    {
+        $debtName = $parsed['debt_name'] ?? 'Cicilan';
+        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+
+        $msg = "💳 *Pembayaran cicilan terdeteksi:*\n\n"
+            . "📋 {$debtName}\n"
+            . "💰 Rp {$amount}\n";
+
+        if ($confidence < 0.75) {
+            $msg .= "\n⚠️ _Butler kurang yakin. Cek dulu ya!_";
+        }
+
+        return $msg;
+    }
+
+    /**
+     * Format sinking fund deposit confirmation.
+     */
+    public function formatSinkingDepositConfirmation(array $parsed, float $confidence): string
+    {
+        $fundName = $parsed['fund_name'] ?? 'Sinking Fund';
+        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+
+        return "✈️ *Setoran sinking fund terdeteksi:*\n\n"
+            . "📁 {$fundName}\n"
+            . "💰 Rp {$amount}\n";
+    }
+
+    /**
+     * Format transfer confirmation.
+     */
+    public function formatTransferConfirmation(array $parsed, float $confidence): string
+    {
+        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $source = $parsed['source_fund'] ?? 'Tabungan';
+        $target = $parsed['target_fund'] ?? 'dana lain';
+
+        $msg = "🔄 *Transfer uang terdeteksi:*\n\n"
+            . "💰 Rp {$amount}\n"
+            . "📤 Dari: {$source}\n"
+            . "📥 Ke: {$target}\n";
+
+        if ($confidence < 0.75) {
+            $msg .= "\n⚠️ _Butler kurang yakin. Cek dulu ya!_";
+        }
+
+        return $msg;
     }
 
     /**
      * Format confirmed entry message (after user confirms).
+     * v2.1: Appends [↩ Undo] button and stores telegram_message_id on entry.
      */
     public function formatConfirmedMessage(string $type, array $parsed, int $todayTotal, ?int $remaining = null): string
     {
         return match ($type) {
-            'expense' => $this->formatExpenseConfirmed($parsed, $todayTotal, $remaining),
-            'meal' => $this->formatMealConfirmed($parsed, $todayTotal, $remaining),
-            'saving' => $this->formatSavingConfirmed($parsed, $todayTotal),
-            default => '✅ Dicatat!',
+            'expense'              => $this->formatExpenseConfirmed($parsed, $todayTotal, $remaining),
+            'meal'                 => $this->formatMealConfirmed($parsed, $todayTotal, $remaining),
+            'saving'               => $this->formatSavingConfirmed($parsed, $todayTotal),
+            'income'               => 'Dicatat.\nIncome Rp ' . number_format($parsed['amount'] ?? 0, 0, ',', '.') . ' masuk.',
+            'bill_payment'         => 'Tagihan ' . ($parsed['bill_name'] ?? 'Tagihan') . ' dibayar.',
+            'debt_payment'         => 'Cicilan ' . ($parsed['debt_name'] ?? 'Cicilan') . ' dibayar.',
+            'sinking_fund_deposit' => 'Setoran ke ' . ($parsed['fund_name'] ?? 'Dana') . ' disimpan.',
+            'transfer'             => 'Transfer Rp ' . number_format($parsed['amount'] ?? 0, 0, ',', '.') . ' selesai.',
+            default                => 'Dicatat.',
         };
+    }
+
+    /**
+     * Send a confirmed entry message with an [↩ Undo] button.
+     * Returns the Telegram message_id so it can be stored on the entry.
+     *
+     * @param  string  $chatId
+     * @param  string  $text        formatted message from formatConfirmedMessage()
+     * @param  string  $undoToken   stored on entry.undo_token
+     * @return int|null             telegram message_id
+     */
+    public function sendConfirmedWithUndo(string $chatId, string $text, string $undoToken): ?int
+    {
+        $buttons = $this->buildUndoButton($undoToken);
+        $keyboard = ['inline_keyboard' => [$buttons]];
+
+        try {
+            $response = Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id'      => $chatId,
+                'text'         => $text,
+                'parse_mode'   => 'Markdown',
+                'reply_markup' => json_encode($keyboard),
+            ]);
+
+            if (!$response->successful()) {
+                // Retry without markdown
+                $response = Http::post("{$this->baseUrl}/sendMessage", [
+                    'chat_id'      => $chatId,
+                    'text'         => $text,
+                    'reply_markup' => json_encode($keyboard),
+                ]);
+            }
+
+            return $response->json('result.message_id');
+        } catch (\Exception $e) {
+            Log::error('Telegram sendConfirmedWithUndo failed', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Edit a confirmed message to remove the undo button after expiry or use.
+     * Leaves the original text intact, strips the keyboard.
+     */
+    public function stripUndoButton(string $chatId, int $messageId, string $newText): void
+    {
+        try {
+            Http::post("{$this->baseUrl}/editMessageText", [
+                'chat_id'      => $chatId,
+                'message_id'   => $messageId,
+                'text'         => $newText,
+                'parse_mode'   => 'Markdown',
+                'reply_markup' => json_encode(['inline_keyboard' => []]),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Telegram stripUndoButton failed', ['message' => $e->getMessage()]);
+        }
     }
 
     /**
@@ -308,21 +651,16 @@ class TelegramService
     {
         $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
         $todayF = number_format($todayTotal, 0, ',', '.');
-        $emoji = $this->getCategoryEmoji($parsed['category'] ?? 'other');
-        $note = $parsed['note'] ?? '-';
+        $note   = $parsed['note'] ?? ($parsed['category'] ?? '-');
 
-        $msg = "✅ *Pengeluaran disimpan!*\n\n"
-            . "💸 Rp {$amount}\n"
-            . "{$emoji} {$note}\n\n"
-            . "📊 Total hari ini: Rp {$todayF}";
+        $msg = "Tercatat: {$note} • Rp {$amount}\n";
+        $msg .= "Total hari ini: Rp {$todayF}";
 
         if ($remaining !== null) {
             $remainF = number_format(abs($remaining), 0, ',', '.');
-            if ($remaining >= 0) {
-                $msg .= "\n💰 Sisa budget: Rp {$remainF}";
-            } else {
-                $msg .= "\n⚠️ Melebihi budget Rp {$remainF}!";
-            }
+            $msg .= $remaining >= 0
+                ? "\nBudget sisa: Rp {$remainF} 🟢"
+                : "\nMelebihi budget Rp {$remainF} ⚠️";
         }
 
         return $msg;
@@ -330,20 +668,17 @@ class TelegramService
 
     private function formatMealConfirmed(array $parsed, int $todayCalories, ?int $calorieGoal): string
     {
-        $foodItem = $parsed['food_item'] ?? '-';
-        $calories = $parsed['calories'] ?? 0;
+        $foodItem    = $parsed['food_item'] ?? '-';
+        $calories    = $parsed['calories'] ?? 0;
         $isEstimated = $parsed['is_calorie_estimated'] ?? true;
-        $estimateNote = $isEstimated ? ' _(estimasi)_' : '';
+        $src         = $isEstimated ? ' _(estimasi)_' : '';
 
-        $msg = "✅ *Makanan disimpan!*\n\n"
-            . "🥘 {$foodItem}\n"
-            . "🔥 {$calories} kcal{$estimateNote}\n\n"
-            . "📊 Total hari ini: {$todayCalories} kcal";
+        $msg = "{$foodItem} • {$calories} kcal{$src}\n";
+        $msg .= "Total hari ini: {$todayCalories} kcal";
 
         if ($calorieGoal) {
-            $remaining = $calorieGoal - $todayCalories;
-            $pct = min(round(($todayCalories / max($calorieGoal, 1)) * 100), 100);
-            $status = $remaining > 0 ? '✅' : '⚠️';
+            $pct    = min(round(($todayCalories / max($calorieGoal, 1)) * 100), 100);
+            $status = ($calorieGoal - $todayCalories) > 0 ? '🟢' : '⚠️';
             $msg .= " / {$calorieGoal} kcal {$status}";
         }
 
@@ -352,14 +687,11 @@ class TelegramService
 
     private function formatSavingConfirmed(array $parsed, int $totalSavings): string
     {
-        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
-        $totalF = number_format($totalSavings, 0, ',', '.');
-        $note = $parsed['note'] ?? 'Tabungan';
+        $amount  = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $totalF  = number_format($totalSavings, 0, ',', '.');
+        $note    = $parsed['fund_name'] ?? $parsed['note'] ?? 'Tabungan';
 
-        return "✅ *Tabungan disimpan!*\n\n"
-            . "💎 Rp {$amount}\n"
-            . "📝 {$note}\n\n"
-            . "💰 Total tabungan: Rp {$totalF}";
+        return "Tabungan Rp {$amount} ke {$note} disimpan.\nTotal: Rp {$totalF}";
     }
 
     /**
