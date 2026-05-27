@@ -27,6 +27,7 @@ class MessageRouter
     private DebtService $debts;
     private PolicyEngine $policy;
     private BehavioralMemoryService $memory;
+    private CommandSuggestionService $suggester;
 
     public function __construct(
         AIService $ai,
@@ -39,19 +40,43 @@ class MessageRouter
         BillService $bills,
         DebtService $debts,
         PolicyEngine $policy,
-        BehavioralMemoryService $memory
+        BehavioralMemoryService $memory,
+        CommandSuggestionService $suggester
     ) {
-        $this->ai        = $ai;
-        $this->entries   = $entries;
-        $this->streaks   = $streaks;
-        $this->aiLog     = $aiLog;
+        $this->ai         = $ai;
+        $this->entries    = $entries;
+        $this->streaks    = $streaks;
+        $this->aiLog      = $aiLog;
         $this->onboarding = $onboarding;
-        $this->telegram  = $telegram;
-        $this->funds     = $funds;
-        $this->bills     = $bills;
-        $this->debts     = $debts;
-        $this->policy    = $policy;
-        $this->memory    = $memory;
+        $this->telegram   = $telegram;
+        $this->funds      = $funds;
+        $this->bills      = $bills;
+        $this->debts      = $debts;
+        $this->policy     = $policy;
+        $this->memory     = $memory;
+        $this->suggester  = $suggester;
+    }
+
+    /**
+     * Try the suggestion engine, send the suggestion if found, log the event,
+     * and return true if a suggestion reply was sent (caller should stop).
+     * Returns false if nothing matched — caller should send the canned fallback.
+     */
+    private function trySendSuggestion(
+        ?User $user,
+        string $chatId,
+        string $message,
+        ?float $confidence,
+        string $reason
+    ): bool {
+        $suggestion = $this->suggester->suggest($message);
+        $this->aiLog->logUnrecognized($user, $message, $confidence, $suggestion, $reason);
+
+        if ($suggestion && !empty($suggestion['reply'])) {
+            $this->telegram->sendMessage($chatId, $suggestion['reply']);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -86,6 +111,11 @@ class MessageRouter
         } catch (\Exception $e) {
             $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
             $this->aiLog->logParseCall($user, $message, null, $latencyMs, false, $e->getMessage());
+
+            // Smart fallback: try keyword/AI suggestion before the canned reply.
+            if ($this->trySendSuggestion($user, $chatId, $message, null, 'parse_exception')) {
+                return;
+            }
 
             $errMsg = config('app.debug')
                 ? $this->telegram->getParseErrorResponse() . "\n\n[Debug] " . substr($e->getMessage(), 0, 300)
@@ -122,7 +152,7 @@ class MessageRouter
             'query_summary' => $this->sendQuickSummary($user, $chatId),
             'query_spending' => $this->handleQuerySpending($user, $chatId, $parsed),
             'set_reminder' => $this->handleSetReminder($user, $chatId, $parsed),
-            'unknown' => $this->telegram->sendMessage($chatId, $parsed['message'] ?? $this->telegram->getLowConfidenceResponse()),
+            'unknown' => $this->handleUnknownIntent($user, $chatId, $message, $parsed, $confidence),
             default   => $this->telegram->sendMessage($chatId, $this->ai->chat($message)),
         };
     }
@@ -315,6 +345,22 @@ class MessageRouter
         return false;
     }
 
+    /**
+     * Handler for AI-returned intent='unknown' — third fallback site.
+     */
+    private function handleUnknownIntent(User $user, string $chatId, string $message, array $parsed, float $confidence): void
+    {
+        if ($this->trySendSuggestion($user, $chatId, $message, $confidence, 'unknown_intent')) {
+            return;
+        }
+        // Suggestion engine had no match → fall back to the AI's clarification
+        // message if present, otherwise the generic canned reply.
+        $this->telegram->sendMessage(
+            $chatId,
+            $parsed['message'] ?? $this->telegram->getLowConfidenceResponse()
+        );
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // ENTRY HANDLING
     // ════════════════════════════════════════════════════════════════════
@@ -322,6 +368,10 @@ class MessageRouter
     private function handleEntry(User $user, string $chatId, string $rawMessage, array $parsed, float $confidence): void
     {
         if ($confidence < 0.50) {
+            // Smart fallback: try suggestion before the canned reply.
+            if ($this->trySendSuggestion($user, $chatId, $rawMessage, $confidence, 'low_confidence')) {
+                return;
+            }
             $this->telegram->sendMessage($chatId, $this->telegram->getLowConfidenceResponse());
             return;
         }

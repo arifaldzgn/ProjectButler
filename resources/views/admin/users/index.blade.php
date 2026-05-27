@@ -2,10 +2,14 @@
 @section('title', 'Admin Panel — Butler')
 @section('content')
 
-<div class="animate-in">
-    <h2>Admin Panel</h2>
-    <p class="page-desc">Daftar semua pengguna Butler.</p>
+<div class="page-header animate-in">
+    <div>
+        <h2>Admin Panel 🛠️</h2>
+        <p>Manage users, monitor AI performance, and review usage patterns.</p>
+    </div>
 </div>
+
+@include('admin.partials.nav')
 
 @if(session('success'))
     <div style="background: rgba(34,197,94,0.15); color: #86efac; padding: 12px; border-radius: 8px; margin-bottom: 20px;">

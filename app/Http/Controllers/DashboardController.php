@@ -96,9 +96,11 @@ class DashboardController extends Controller
             ->where('is_active', true)
             ->with(['fundTransactions.entry.sourceFund'])->get();
 
-        // ── Total balance (all active funds) ──────────────────────
-        $totalBalance        = $user->funds()->where('is_active', true)->sum('current_balance');
+        // ── Total balance ──────────────────────────────────────────
+        // "Total Kekayaan" = liquid cash in spending accounts only.
+        // Goals/sinking funds are earmarked money — shown separately.
         $totalAccountBalance = $user->accounts()->where('is_active', true)->sum('current_balance');
+        $totalBalance        = $totalAccountBalance;   // spending accounts = net liquid balance
         $totalSavingsBalance = $user->funds()
             ->whereIn('fund_type', ['savings', 'emergency_fund', 'sinking_fund', 'goal'])
             ->where('is_active', true)->sum('current_balance');
@@ -389,11 +391,19 @@ class DashboardController extends Controller
         }
 
         $validated = $request->validate([
-            'amount'   => 'nullable|integer|min:1',
-            'category' => 'nullable|string|max:32',
-            'note'     => 'nullable|string|max:255',
-            'merchant' => 'nullable|string|max:128',
+            'amount'    => 'nullable|integer|min:1',
+            'category'  => 'nullable|string|max:32',
+            'note'      => 'nullable|string|max:255',
+            'merchant'  => 'nullable|string|max:128',
+            // Meal-specific fields
+            'calories'  => 'nullable|integer|min:0',
+            'food_item' => 'nullable|string|max:256',
         ]);
+
+        // When calories are user-corrected, mark as no longer estimated
+        if (isset($validated['calories'])) {
+            $validated['is_calorie_estimated'] = false;
+        }
 
         $entry->update(array_filter($validated, fn ($v) => $v !== null));
 
@@ -418,6 +428,7 @@ class DashboardController extends Controller
             'monthly_budget_idr'    => 'nullable|integer|min:0',
             'monthly_income_idr'    => 'nullable|integer|min:0',
             'daily_calorie_goal'    => 'nullable|integer|min:0',
+            'calorie_goal_type'     => 'nullable|in:bulking,cutting,maintenance',
             'daily_summary_enabled' => 'nullable|boolean',
             'summary_time'          => 'nullable|string|regex:/^\d{2}:\d{2}$/',
         ]);

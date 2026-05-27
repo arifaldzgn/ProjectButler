@@ -4,50 +4,79 @@
 @section('content')
 
 {{-- ── Header ────────────────────────────────────────────────── --}}
-<div class="page-header animate-in">
-    <h2>Halo, {{ $user->name }} 👋</h2>
-    <p>{{ today()->translatedFormat('l, d F Y') }}</p>
+@php
+    $hour = now($user->timezone ?? 'Asia/Jakarta')->hour;
+    $greet = $hour < 11 ? 'Selamat pagi' : ($hour < 15 ? 'Selamat siang' : ($hour < 19 ? 'Selamat sore' : 'Selamat malam'));
+    $waveEmoji = $hour < 11 ? '☀️' : ($hour < 19 ? '👋' : '🌙');
+@endphp
+<div class="page-header animate-in" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+    <div>
+        <h2>{{ $greet }}, {{ $user->name }} {{ $waveEmoji }}</h2>
+        <p>Ringkasan keuangan dan aktivitas Butler-mu hari ini.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <div style="padding:8px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-weight:600;color:var(--text-secondary);box-shadow:var(--card-shadow)">
+            📅 {{ today()->translatedFormat('d M Y') }}
+        </div>
+    </div>
 </div>
 
-{{-- ── Total Balance Card ───────────────────────────────────────── --}}
-<div class="card animate-in" style="
-    animation-delay:.02s;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-    border: 1px solid rgba(99,102,241,0.3);
-    padding: 24px 28px;
-    margin-bottom: 0;
-">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px">
+{{-- ── Total Balance — Hero card ───────────────────────────────── --}}
+<div class="card animate-in net-worth-card" style="animation-delay:.02s;margin-bottom:14px;position:relative;overflow:hidden">
+
+    {{-- Decorative gradient blob --}}
+    <div aria-hidden="true" style="
+        position:absolute;top:-60px;right:-60px;width:240px;height:240px;
+        background:radial-gradient(circle, rgba(139,92,246,0.18), transparent 70%);
+        pointer-events:none;
+    "></div>
+
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:20px; position:relative">
 
         {{-- Main total --}}
-        <div>
-            <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:rgba(165,180,252,0.7); margin-bottom:6px">
-                💼 Total Kekayaan
+        <div style="min-width:0;flex:1">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                <div style="
+                    width:36px;height:36px;border-radius:10px;
+                    background:var(--grad-purple);
+                    display:inline-flex;align-items:center;justify-content:center;
+                    box-shadow:0 6px 14px -4px rgba(124,58,237,.45);
+                    color:#fff;font-size:16px;
+                ">💼</div>
+                <div style="font-size:13px;font-weight:600;color:var(--text-secondary);letter-spacing:-.01em">
+                    Total Kekayaan
+                </div>
             </div>
-            <div style="font-size:32px; font-weight:700; color:#a5b4fc; line-height:1.1; letter-spacing:-0.5px">
+            <div style="font-size:34px;font-weight:800;color:var(--text-primary);line-height:1;letter-spacing:-.03em">
                 Rp {{ number_format($totalBalance, 0, ',', '.') }}
             </div>
-            <div style="font-size:12px; color:rgba(165,180,252,0.5); margin-top:6px">
-                Dari {{ $accounts->count() + $sinkingFunds->count() }} akun aktif
+            <div style="font-size:12px;color:var(--text-muted);margin-top:8px;display:flex;align-items:center;gap:6px">
+                <span class="pill pill-success" style="padding:2px 8px;font-size:11px">✓ aktif</span>
+                <span>{{ $accounts->count() }} akun belanja tersinkron</span>
             </div>
         </div>
 
         {{-- Breakdown columns --}}
-        <div style="display:flex; gap:32px; flex-wrap:wrap">
-            <div style="text-align:right">
-                <div style="font-size:11px; color:rgba(165,180,252,0.6); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em">Kas & Dompet</div>
-                <div style="font-size:18px; font-weight:600; color:#93c5fd">
-                    Rp {{ number_format($totalAccountBalance, 0, ',', '.') }}
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+            @foreach($accounts as $acc)
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
+                    {{ $acc->name }}
+                    @if($acc->is_default_spending) <span style="color:var(--accent)">★</span> @endif
                 </div>
-                <div style="font-size:11px; color:rgba(165,180,252,0.4); margin-top:2px">{{ $accounts->count() }} akun belanja</div>
+                <div style="font-size:18px;font-weight:700;color:var(--text-primary)">
+                    Rp {{ number_format($acc->current_balance, 0, ',', '.') }}
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px">{{ ucfirst($acc->type ?? 'Akun') }}</div>
             </div>
+            @endforeach
             @if($totalSavingsBalance > 0)
-            <div style="text-align:right">
-                <div style="font-size:11px; color:rgba(165,180,252,0.6); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em">Tabungan & Dana</div>
-                <div style="font-size:18px; font-weight:600; color:#6ee7b7">
+            <div style="border-left:1px solid var(--border);padding-left:24px">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">Dana Dialokasikan</div>
+                <div style="font-size:18px;font-weight:700;color:#059669">
                     Rp {{ number_format($totalSavingsBalance, 0, ',', '.') }}
                 </div>
-                <div style="font-size:11px; color:rgba(165,180,252,0.4); margin-top:2px">{{ $sinkingFunds->count() }} dana aktif</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px">{{ $sinkingFunds->count() }} goals / tabungan</div>
             </div>
             @endif
         </div>
@@ -62,7 +91,7 @@
     <div class="card stat-card red">
         <span class="stat-icon">💸</span>
         <div class="card-title">Pengeluaran Hari Ini</div>
-        <div class="card-value" style="color:#fca5a5">
+        <div class="card-value">
             Rp {{ number_format($todaySpend, 0, ',', '.') }}
         </div>
         @if($user->daily_budget_idr)
@@ -81,7 +110,7 @@
     <div class="card stat-card orange">
         <span class="stat-icon">📅</span>
         <div class="card-title">Spending Bulan Ini</div>
-        <div class="card-value" style="color:#fdba74">
+        <div class="card-value">
             Rp {{ number_format($monthlySpend, 0, ',', '.') }}
         </div>
         @if($user->monthly_budget_idr)
@@ -98,7 +127,7 @@
     <div class="card stat-card green">
         <span class="stat-icon">💰</span>
         <div class="card-title">Income Bulan Ini</div>
-        <div class="card-value" style="color:#86efac">
+        <div class="card-value">
             Rp {{ number_format($monthlyIncome, 0, ',', '.') }}
         </div>
         @if($monthlySavings > 0)
@@ -113,7 +142,7 @@
     <div class="card stat-card yellow">
         <span class="stat-icon">🔥</span>
         <div class="card-title">Kalori Hari Ini</div>
-        <div class="card-value" style="color:#fde68a">{{ number_format($todayCalories) }}</div>
+        <div class="card-value">{{ number_format($todayCalories) }}</div>
         @if($user->daily_calorie_goal)
             @php $cRem = $user->daily_calorie_goal - $todayCalories; $cPct = min(round($todayCalories/max($user->daily_calorie_goal,1)*100),100); @endphp
             <div class="progress-bar" style="margin-top:10px">
@@ -129,7 +158,7 @@
     <div class="card stat-card accent">
         <span class="stat-icon">🔥</span>
         <div class="card-title">Logging Streak</div>
-        <div class="card-value" style="color:#c4b5fd">{{ $streak?->log_current ?? 0 }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-value">{{ $streak?->log_current ?? 0 }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
         <div class="card-subtitle">Terpanjang: {{ $streak?->log_longest ?? 0 }} hari</div>
     </div>
     @endif
@@ -197,13 +226,13 @@
     <div class="card stat-card accent" style="margin-bottom:0">
         <span class="stat-icon">🔥</span>
         <div class="card-title">Logging Streak</div>
-        <div class="card-value" style="color:#c4b5fd">{{ $streak->log_current }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-value">{{ $streak->log_current }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
         <div class="card-subtitle">Terpanjang: {{ $streak->log_longest }} hari</div>
     </div>
     <div class="card stat-card blue" style="margin-bottom:0">
         <span class="stat-icon">🍽️</span>
         <div class="card-title">Meal Streak</div>
-        <div class="card-value" style="color:#93c5fd">{{ $streak->meal_current ?? 0 }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-value">{{ $streak->meal_current ?? 0 }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
         <div class="card-subtitle">Terpanjang: {{ $streak->meal_longest ?? 0 }} hari</div>
     </div>
 </div>
@@ -227,11 +256,12 @@
         </div>
         @endforeach
         @if($accounts->count() > 1)
-        <div class="account-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:12px">
+        <div class="account-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:12px;background:var(--bg-hover)">
             <div>
-                <div class="account-name" style="color:var(--text-muted);font-size:12px">Total Kas & Dompet</div>
+                <div class="account-name" style="font-size:12px;font-weight:600;color:var(--text-secondary)">Total Likuid</div>
+                <div class="account-type">{{ $accounts->count() }} akun belanja aktif</div>
             </div>
-            <div class="account-balance" style="color:#93c5fd">Rp {{ number_format($totalAccountBalance,0,',','.') }}</div>
+            <div class="account-balance" style="font-size:17px">Rp {{ number_format($totalBalance,0,',','.') }}</div>
         </div>
         @endif
     </div>
@@ -385,7 +415,11 @@ new Chart(document.getElementById('weekSpendChart'), {
             tooltip: { callbacks: { label: ctx => formatRupiah(ctx.parsed.y) } }
         },
         scales: {
-            y: { ticks: { callback: v => formatRupiah(v) }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+            y: {
+                ticks: { callback: v => formatRupiah(v) },
+                grid: { color: getComputedStyle(document.documentElement).getPropertyValue('--border').trim() },
+                beginAtZero: true
+            },
             x: { grid: { display: false } }
         }
     }

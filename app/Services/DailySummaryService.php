@@ -203,11 +203,12 @@ class DailySummaryService
 
         return [
             'user' => [
-                'name' => $user->name,
+                'name'               => $user->name,
                 'monthly_income_idr' => $user->monthly_income_idr,
-                'daily_budget_idr' => $user->daily_budget_idr,
-                'tracking_mode' => $user->tracking_mode,
+                'daily_budget_idr'   => $user->daily_budget_idr,
+                'tracking_mode'      => $user->tracking_mode,
                 'daily_calorie_goal' => $user->daily_calorie_goal,
+                'calorie_goal_type'  => $user->calorie_goal_type ?? 'maintenance',
             ],
             'date' => $today->translatedFormat('l, d F Y'),
             'entries' => $formattedEntries,

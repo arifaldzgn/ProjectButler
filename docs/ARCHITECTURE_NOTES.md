@@ -56,6 +56,20 @@ FundService          UpdateBehavioralMemory
 
 ---
 
+## Smart Fallback (v2.3)
+
+When `MessageRouter` can't confidently route a message — parse exception, `confidence < 0.50`, or `intent === 'unknown'` — it invokes `CommandSuggestionService::suggest()` before sending the canned "bingung" reply.
+
+**Two-stage hybrid:**
+1. **Deterministic match** against a static catalog of ~18 capabilities (label, triggers, example). Scoring = 0.6×best-token-Levenshtein + 0.4×Jaccard overlap + substring-contains bonus. Threshold 0.55. Runs < 5ms, no AI cost.
+2. **AI fallback** (only on Stage-1 miss) — one `OpenRouterClient::generateJson()` call asks the AI to classify as `did_you_mean` / `unsupported` / `unclear` and nominate the closest supported feature.
+
+If still nothing matches, the original canned reply is sent (no regression).
+
+Every fallback event is logged to `ai_logs` with `intent_detected = 'unrecognized'`, the original confidence, and a JSON-encoded suggestion payload in `error_message`. The `/admin/unrecognized` page groups these by normalized phrase + frequency so admins can see what features users keep reaching for.
+
+---
+
 ## Message Routing Flow (v2.1)
 
 ### Quick Commands (no AI cost)
@@ -154,11 +168,11 @@ Message received
 
 ## Daily Summary Context (AI Prompt B)
 
-The AI receives a structured context object. As of v2.1.2, `totals` includes:
+The AI receives a structured context object. As of v2.2.1, `totals` includes:
 
 ```json
 {
-  "user": { "name", "monthly_income_idr", "daily_budget_idr", "tracking_mode", "daily_calorie_goal" },
+  "user": { "name", "monthly_income_idr", "daily_budget_idr", "tracking_mode", "daily_calorie_goal", "calorie_goal_type" },
   "date": "...",
   "entries": [...],
   "totals": {
@@ -201,6 +215,7 @@ The AI receives a structured context object. As of v2.1.2, `totals` includes:
 | `/dashboard/settings` | `DashboardController@settings` (GET/POST) | Edit profile, budgets, calorie goal, notifications |
 | `/admin/users` | `AdminController@index` | User list with counts |
 | `/admin/ai-logs` | `AdminController@aiLogs` | AI parse/summary logs with filters, latency, confidence, failures |
+| `/admin/unrecognized` | `AdminController@unrecognized` | Grouped phrases that triggered the smart-fallback engine, with frequency / reason / suggestion stats (v2.3) |
 
 ---
 

@@ -57,6 +57,42 @@ class AiLogService
     }
 
     /**
+     * Log a message that Butler couldn't confidently route.
+     *
+     * Reuses the existing `ai_logs` table — flagged distinctly by
+     * setting `intent_detected = 'unrecognized'` so the admin page
+     * can filter on it without a schema change.
+     *
+     * @param array $suggestion Output from CommandSuggestionService::suggest() (or null).
+     * @param string $reason    One of: 'parse_exception', 'low_confidence', 'unknown_intent'
+     */
+    public function logUnrecognized(
+        ?User $user,
+        string $rawInput,
+        ?float $confidence,
+        ?array $suggestion,
+        string $reason
+    ): AiLog {
+        $payload = [
+            'reason'     => $reason,
+            'suggestion' => $suggestion,
+        ];
+
+        return $this->logCall([
+            'user_id'          => $user?->id,
+            'call_type'        => 'parse',
+            'prompt_version'   => 'fallback_v1',
+            'raw_input'        => $rawInput,
+            'raw_output'       => $suggestion ? json_encode($suggestion) : '',
+            'intent_detected'  => 'unrecognized',
+            'confidence_score' => $confidence,
+            'latency_ms'       => 0,   // hook is post-parse; not a separate AI call (unless stage-2 fires)
+            'was_successful'   => false,
+            'error_message'    => json_encode($payload),
+        ]);
+    }
+
+    /**
      * Log a summary generation call.
      */
     public function logSummaryCall(

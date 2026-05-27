@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\AiLog;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AdminController extends Controller
 {
@@ -43,6 +44,70 @@ class AdminController extends Controller
         ];
 
         return view('admin.ai-logs.index', compact('logs', 'callTypes', 'users', 'stats'));
+    }
+
+    /**
+     * Grouped view of "unrecognized" Telegram messages — patterns of phrases
+     * that Butler's parser/router couldn't handle, so we can see what users
+     * are reaching for.
+     */
+    public function unrecognized(Request $request)
+    {
+        // Filters
+        $from    = $request->date('from') ?: now()->subDays(30)->startOfDay();
+        $to      = $request->date('to')   ?: now()->endOfDay();
+        $minCnt  = (int) ($request->input('min_count', 1));
+
+        // ── Grouped phrases ─────────────────────────────────────────────
+        // Normalize via SQL: lowercase + collapse whitespace via TRIM on REGEX_REPLACE
+        // (works on MySQL 8 / MariaDB 10.0+ — sufficient for this admin tool)
+        $normalizedExpr = "TRIM(LOWER(raw_input))";
+
+        $grouped = DB::table('ai_logs')
+            ->where('intent_detected', 'unrecognized')
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw("
+                {$normalizedExpr} as phrase,
+                COUNT(*) as occurrences,
+                COUNT(DISTINCT user_id) as unique_users,
+                MAX(created_at) as last_seen,
+                MAX(error_message) as sample_suggestion,
+                MAX(confidence_score) as max_confidence
+            ")
+            ->groupBy(DB::raw($normalizedExpr))
+            ->havingRaw('COUNT(*) >= ?', [$minCnt])
+            ->orderByDesc('occurrences')
+            ->orderByDesc('last_seen')
+            ->paginate(50)
+            ->withQueryString();
+
+        // ── Header stats (last 7 days) ──────────────────────────────────
+        $stats = [
+            'total_7d'         => AiLog::where('intent_detected', 'unrecognized')
+                                       ->where('created_at', '>=', now()->subDays(7))->count(),
+            'unique_phrases_7d'=> (int) DB::table('ai_logs')
+                                       ->where('intent_detected', 'unrecognized')
+                                       ->where('created_at', '>=', now()->subDays(7))
+                                       ->distinct(DB::raw($normalizedExpr))
+                                       ->count(DB::raw($normalizedExpr)),
+            'unique_users_7d'  => (int) AiLog::where('intent_detected', 'unrecognized')
+                                       ->where('created_at', '>=', now()->subDays(7))
+                                       ->distinct('user_id')
+                                       ->count('user_id'),
+        ];
+
+        // Top phrase (last 7d)
+        $top = DB::table('ai_logs')
+            ->where('intent_detected', 'unrecognized')
+            ->where('created_at', '>=', now()->subDays(7))
+            ->selectRaw("{$normalizedExpr} as phrase, COUNT(*) as c")
+            ->groupBy(DB::raw($normalizedExpr))
+            ->orderByDesc('c')
+            ->first();
+        $stats['top_phrase']       = $top->phrase ?? null;
+        $stats['top_phrase_count'] = $top->c      ?? 0;
+
+        return view('admin.unrecognized.index', compact('grouped', 'stats', 'from', 'to', 'minCnt'));
     }
 
     public function impersonate(Request $request, User $user)

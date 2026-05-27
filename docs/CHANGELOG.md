@@ -4,6 +4,116 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.3.1] 2026-05-27 — Admin nav bar across all admin pages
+
+### Added
+
+**Shared admin navigation partial**
+- New partial: `resources/views/admin/partials/nav.blade.php`.
+- Renders a pill-style button row with all admin sections: 👥 Users · 🤖 AI Logs · 🤔 Unrecognized.
+- Active page is highlighted with an accent border/background + a small dot indicator.
+- Included at the top of every admin view (`admin.users.index`, `admin.ai-logs.index`, `admin.unrecognized.index`).
+- Adding a new admin route in the future requires editing the `$adminNav` array in the partial only — all pages inherit it automatically.
+- Removed the standalone "← AI Logs" / "→ Unrecognized Messages" one-off links that previously existed on individual pages.
+
+### Why
+
+Admin had three separate pages with no shared navigation — jumping between them required knowing the URLs or using the browser back button. A consistent top nav makes the admin area feel cohesive and scales automatically to any future `/admin/*` pages.
+
+---
+
+## [v2.3.0] 2026-05-27 — Smart fallback + unrecognized-message learning
+
+### Added
+
+**Smart fallback when Butler can't understand**
+- New service: `app/Services/CommandSuggestionService.php`. Two-stage suggestion engine.
+  - **Stage 1 (deterministic)** — tokenizes the user input and scores it against a catalog of ~18 supported capabilities (the 14 AI intents + quick-command shortcuts). Uses weighted Jaccard token-overlap (40%) + best per-token Levenshtein (60%) + substring-contains bonus. Returns top match above similarity 0.55. Runs in < 5ms. No AI cost.
+  - **Stage 2 (AI fallback)** — only fires when Stage 1 returns nothing. Makes a single follow-up `OpenRouterClient::generateJson()` call asking the AI to classify the message as `did_you_mean` / `unsupported` / `unclear` and to nominate the closest supported feature.
+- Wired into 3 fallback sites in `MessageRouter`:
+  - Parse exception (AI threw / OpenRouter unreachable)
+  - Low confidence (`confidence < 0.50`) inside `handleEntry`
+  - AI returned `intent='unknown'`
+- User-facing replies:
+  - Did you mean: `🤔 Maksudmu: *Catat Tabungan*? Coba: \`nabung 500rb\``
+  - Unsupported: `Butler belum bisa itu 😅 Tapi mungkin kamu bisa coba *Lihat Ringkasan*: \`ringkasan\``
+- If suggestion engine returns null, falls back to the existing canned "bingung" reply — no regression in behaviour for genuinely random input.
+
+**Unrecognized-messages admin log**
+- New method on `AiLogService`: `logUnrecognized(?User, $rawInput, ?confidence, $suggestionPayload, $reason)`.
+- Reuses the existing `ai_logs` table — no migration. Flag column: `intent_detected = 'unrecognized'` (distinct from the AI's own `'unknown'` intent). Suggestion-engine output is JSON-serialized into `error_message` for later inspection.
+- New admin page: `/admin/unrecognized` — grouped view of phrases by normalized `raw_input`.
+  - Header cards: total unrecognized (7d), unique phrases (7d), unique affected users (7d), top phrase + count
+  - Filter: date range (default last 30d), min frequency
+  - Table: phrase preview + reason (parse_exception / low_confidence / unknown_intent), occurrences, unique users, last seen, which suggestion was sent (with stage 1/2 indicator and `did_you_mean` / `unsupported` / `unclear` badge)
+  - Pagination 50/page, sorted by frequency desc
+- Link added on the existing `/admin/ai-logs` page header to navigate to the new view.
+
+### Why
+
+Before this, an unrecognized Telegram message returned a single canned reply with three format hints — users had no path forward and admins had no signal about what features users were trying to reach. The new fallback makes Butler feel dynamic ("did you mean X?", "we don't have that yet, try Y") while the admin log captures the pattern over time so the team can prioritize what to build next.
+
+---
+
+## [v2.2.1] 2026-05-27 — Expense balance fix + calorie goal type + calorie transparency
+
+### Fixed
+
+**Total Kekayaan — spending accounts only**
+- `$totalBalance` in `DashboardController@index` was summing all active funds (including goals, sinking funds, emergency fund). Corrected to use spending budget accounts only (`$totalAccountBalance`).
+- Hero card on dashboard now shows per-account breakdown in the right column (instead of a lumped "Kas & Dompet" total) and separates "Dana Dialokasikan" (savings/goals/sinking funds) with a visual divider.
+- Accounts section footer row renamed to "Total Likuid" (spending accounts only) — semantically correct.
+- Goals and sinking funds are clearly separate: they're earmarked money, not liquid cash.
+
+### Added
+
+**Calorie goal type: bulking / maintenance / cutting**
+- New `calorie_goal_type` column on `users` table (`nullable enum: bulking|cutting|maintenance`, default `maintenance`).
+- Migration: `2026_05_27_000001_add_calorie_goal_type_to_users.php`.
+- Added to `User::$fillable`.
+- Settings page: interactive 3-option tile selector (💪 Bulking / ⚖️ Maintenance / 🎯 Cutting) with live visual feedback on click.
+- `DashboardController@saveSettings`: validates and saves the field.
+- `DailySummaryService::buildSummaryContext()`: passes `calorie_goal_type` to the AI so it can frame calorie advice correctly (e.g., "you're 200 kcal short of your bulking target").
+- Nutrition page header shows the current goal type as a colored pill (links to Settings).
+
+**Calorie estimate transparency**
+- Each meal row in the nutrition page shows `⚡ est. AI` or `✓ manual` inline badge.
+- Estimated meals show a subtitle explaining the source: "Estimasi berdasarkan rata-rata database makanan umum".
+- An info card at the bottom of Today's Meals explains the estimation methodology (USDA/FoodData Central/SE Asia sources) and how to correct.
+- Inline ✏️ edit per meal: click opens an in-row form to correct `food_item` and `calories` without leaving the page. Saves via `PATCH /dashboard/entries/{entry}`. On save, badge flips from "est. AI" → "manual".
+- `updateEntry()` now accepts `calories` (nullable integer) and `food_item` (nullable string 256). When `calories` is corrected, `is_calorie_estimated` is automatically set to `false`.
+- Added `<meta name="csrf-token">` to dashboard layout (required for the PATCH fetch call).
+
+---
+
+## [v2.2.0] 2026-05-27 — Dashboard UI revamp: light/dark mode + premium aesthetic
+
+### Changed
+
+**Layout (`layouts/dashboard.blade.php`) — full visual refresh**
+- Added **light/dark theme system** driven by `data-theme` on `<html>`. Theme tokens (`--bg`, `--bg-card`, `--text-primary`, `--text-secondary`, `--text-muted`, `--border`, `--card-shadow`, etc.) re-resolve per theme.
+- **Theme toggle** button in the nav (sun/moon icon, Alpine-controlled). User preference persisted to `localStorage` under key `butler-theme`; falls back to OS preference on first visit.
+- Anti-FOUC inline script applies the saved theme before paint, so there's no flash on load.
+- **Smooth transitions** (250–300ms ease) on background, color, border, and box-shadow for all themed surfaces.
+- **Premium card styles**: increased radius (16px), refined padding, soft light-mode shadows (`0 1px 3px rgba(16,24,40,.04)`), gradient icon tiles for KPI cards (44px rounded squares with soft glow shadows).
+- **Gradient palette** added as CSS variables (`--grad-purple`, `--grad-orange`, `--grad-pink`, `--grad-blue`, `--grad-green`, `--grad-yellow`) used for stat-card icon tiles.
+- **Typography upgrade**: Inter at weights 300–800, tighter letter-spacing on headings (-.025em), larger page-header h2 on desktop (28px).
+- **Mobile-first responsive grid**: `.grid-2` is 1-column under 640px, `.grid-4` is 2×2 until 900px then 4-up. Tables get horizontal scroll on small screens.
+- **Theme-aware Chart.js**: on theme switch, `Chart.defaults.color` and `borderColor` are re-pulled from CSS vars and all existing chart instances are `update('none')`-refreshed live.
+- All existing class names (`.card`, `.stat-card`, `.grid-*`, `.data-table`, `.badge-*`, `.fund-card`, `.meal-item`, `.empty-state`, `.field-input`, `.btn-save`, `.toggle-row`, `.alert-*`, `.account-row`, `.section-title`, `.page-header`) preserved — all dependent views (spending, nutrition, insights, settings, history, admin) auto-inherit the new theming with **zero changes**.
+
+**Dashboard index (`dashboard/index.blade.php`) — polish pass**
+- Time-aware greeting: "Selamat pagi/siang/sore/malam, {name}" with contextual emoji (☀️ / 👋 / 🌙) based on the user's local hour.
+- Date chip badge in the header right side.
+- "Total Kekayaan" hero card redesigned: gradient icon tile, larger 34px bold figure, decorative blob in the corner, breakdown columns now read clearly in both themes.
+- Removed hard-coded light text colours from KPI card values — they now use `--text-primary` and read correctly in light mode.
+- Chart grid colour now pulls from `--border` CSS var so chart lines blend correctly in both themes.
+
+### Why
+The original dashboard was dark-only with hard-coded light text colors that would be unreadable in light mode. Users on bright-screen mobile (which is the primary use case for a Telegram webview) need a light option. The new design also aligns with modern SaaS dashboards — softer surfaces, gradient accents, clearer hierarchy — while preserving every controller/route/query and every Blade class name used by other views.
+
+---
+
 ## [v2.1.4] 2026-05-27 — Total balance on dashboard home
 
 ### Added

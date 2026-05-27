@@ -2,10 +2,14 @@
 @section('title', 'AI Logs')
 
 @section('content')
-<div class="page-header">
-    <h2>AI Logs 🤖</h2>
-    <p>Parse calls, summary calls, latency, confidence, and failures</p>
+<div class="page-header animate-in">
+    <div>
+        <h2>AI Logs 🤖</h2>
+        <p>Parse calls, summary calls, latency, confidence, and failures</p>
+    </div>
 </div>
+
+@include('admin.partials.nav')
 
 <!-- Stats -->
 <div class="grid-4">

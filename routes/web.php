@@ -50,7 +50,8 @@ Route::middleware('dashboard.session')->group(function () {
 });
 
 Route::middleware(['dashboard.session', 'is_admin'])->prefix('admin')->group(function () {
-    Route::get('/users',    [AdminController::class, 'index'])->name('admin.users.index');
-    Route::get('/ai-logs',  [AdminController::class, 'aiLogs'])->name('admin.ai-logs.index');
+    Route::get('/users',         [AdminController::class, 'index'])->name('admin.users.index');
+    Route::get('/ai-logs',       [AdminController::class, 'aiLogs'])->name('admin.ai-logs.index');
+    Route::get('/unrecognized',  [AdminController::class, 'unrecognized'])->name('admin.unrecognized.index');
     Route::post('/impersonate/{user}', [AdminController::class, 'impersonate'])->name('admin.impersonate');
 });

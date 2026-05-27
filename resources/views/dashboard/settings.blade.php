@@ -95,12 +95,44 @@
     <div class="card animate-in" style="animation-delay:.10s">
         <div class="card-title">Target Kalori</div>
 
-        <div class="field" style="margin-bottom:0">
+        <div class="field">
             <label class="field-label" for="daily_calorie_goal">Target Kalori Harian (kcal)</label>
             <input class="field-input" type="number" id="daily_calorie_goal" name="daily_calorie_goal"
                    value="{{ old('daily_calorie_goal', $user->daily_calorie_goal) }}"
                    placeholder="Contoh: 2000" min="0">
-            <div style="font-size:11px;color:var(--text-dim);margin-top:4px">Biasanya 1800–2500 kcal/hari untuk orang dewasa.</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Biasanya 1800–2500 kcal/hari untuk orang dewasa.</div>
+        </div>
+
+        <div class="field" style="margin-bottom:0">
+            <label class="field-label">Tujuan Kalori</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                @php $goalType = old('calorie_goal_type', $user->calorie_goal_type ?? 'maintenance'); @endphp
+
+                @foreach([
+                    ['value' => 'bulking',     'emoji' => '💪', 'label' => 'Bulking',      'desc' => 'Naikkan massa otot'],
+                    ['value' => 'maintenance', 'emoji' => '⚖️', 'label' => 'Maintenance',   'desc' => 'Jaga berat badan'],
+                    ['value' => 'cutting',     'emoji' => '🎯', 'label' => 'Cutting',       'desc' => 'Turunkan lemak'],
+                ] as $opt)
+                <label style="
+                    display:flex;flex-direction:column;align-items:center;gap:6px;
+                    padding:14px 10px;border-radius:var(--radius-sm);border:2px solid;
+                    cursor:pointer;text-align:center;transition:all .2s;
+                    border-color:{{ $goalType === $opt['value'] ? 'var(--accent)' : 'var(--border)' }};
+                    background:{{ $goalType === $opt['value'] ? 'rgba(139,92,246,.08)' : 'transparent' }};
+                    font-size:12px;
+                " onclick="selectGoalType('{{ $opt['value'] }}', this)">
+                    <input type="radio" name="calorie_goal_type" value="{{ $opt['value'] }}"
+                           {{ $goalType === $opt['value'] ? 'checked' : '' }}
+                           style="display:none">
+                    <span style="font-size:22px">{{ $opt['emoji'] }}</span>
+                    <span style="font-weight:600;color:var(--text-primary)">{{ $opt['label'] }}</span>
+                    <span style="color:var(--text-muted);font-size:11px">{{ $opt['desc'] }}</span>
+                </label>
+                @endforeach
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
+                Butler akan menyesuaikan saran dan reminder kalori berdasarkan tujuanmu.
+            </div>
         </div>
     </div>
 
@@ -164,5 +196,22 @@
     </div>
 
 </form>
+
+<script>
+function selectGoalType(value, clickedLabel) {
+    // Uncheck all labels
+    document.querySelectorAll('[name="calorie_goal_type"]').forEach(radio => {
+        const lbl = radio.closest('label');
+        lbl.style.borderColor = 'var(--border)';
+        lbl.style.background  = 'transparent';
+        radio.checked = false;
+    });
+    // Activate clicked
+    const radio = clickedLabel.querySelector('input[type="radio"]');
+    radio.checked = true;
+    clickedLabel.style.borderColor = 'var(--accent)';
+    clickedLabel.style.background  = 'rgba(139,92,246,0.08)';
+}
+</script>
 
 @endsection

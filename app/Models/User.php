@@ -27,6 +27,7 @@ class User extends Authenticatable
         // Goals
         'daily_budget_idr',
         'daily_calorie_goal',
+        'calorie_goal_type',
         'health_goal',
         // Default spending account
         'default_account_id',
