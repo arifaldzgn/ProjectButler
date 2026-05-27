@@ -7,6 +7,24 @@
     <p>Track where your money goes</p>
 </div>
 
+<!-- Week-over-Week Banner -->
+@if($wowChangePct !== null)
+<div class="card animate-in" style="margin-bottom: 16px; border-left: 4px solid {{ $wowChangePct > 0 ? 'var(--red)' : 'var(--green)' }};">
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 28px;">{{ $wowChangePct > 0 ? '📈' : '📉' }}</span>
+        <div>
+            <div style="font-size: 14px; font-weight: 600; color: {{ $wowChangePct > 0 ? 'var(--red)' : 'var(--green)' }};">
+                {{ $wowChangePct > 0 ? '+' : '' }}{{ $wowChangePct }}% vs minggu lalu
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted);">
+                Minggu ini: Rp {{ number_format($thisWeekSpend, 0, ',', '.') }} ·
+                Minggu lalu: Rp {{ number_format($lastWeekSpend, 0, ',', '.') }}
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 <!-- Stat Cards -->
 <div class="grid-4">
     <div class="card stat-card red animate-in">
@@ -82,7 +100,7 @@
             <tbody>
                 @foreach($transactions as $tx)
                     <tr>
-                        <td>{{ $tx->transaction_date->format('d M Y') }}</td>
+                        <td>{{ $tx->entry_time->format('d M Y') }}</td>
                         <td><span class="badge badge-{{ $tx->type }}">{{ $tx->type }}</span></td>
                         <td>{{ $tx->description }}</td>
                         <td>{{ $tx->category ?? '-' }}</td>

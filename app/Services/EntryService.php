@@ -169,6 +169,13 @@ class EntryService
             ->savings()->confirmed()->sum('amount');
     }
 
+    public function getMonthSavings(User $user): int
+    {
+        $now = Carbon::now($user->timezone);
+        return (int) Entry::forUser($user->id)
+            ->savings()->confirmed()->forMonth($now->year, $now->month)->sum('amount');
+    }
+
     public function getTodayEntries(User $user): \Illuminate\Database\Eloquent\Collection
     {
         $today = Carbon::now($user->timezone)->toDateString();

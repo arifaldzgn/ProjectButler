@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Entry;
 use App\Services\BehavioralMemoryService;
+use App\Services\TelegramService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -34,7 +35,7 @@ class ProcessBehavioralCorrection implements ShouldQueue
         public readonly array  $newValue
     ) {}
 
-    public function handle(BehavioralMemoryService $memory): void
+    public function handle(BehavioralMemoryService $memory, TelegramService $telegram): void
     {
         $entry = Entry::with('user')->find($this->entryId);
         if (!$entry || !$entry->user) {
@@ -51,6 +52,13 @@ class ProcessBehavioralCorrection implements ShouldQueue
             $this->oldSubject,
             $this->newSubject,
             $this->newValue
+        );
+
+        // Notify the user — close the feedback loop so they know Butler learned
+        $subject = $this->newSubject ?: $this->oldSubject;
+        $telegram->sendMessage(
+            (string) $entry->user->telegram_chat_id,
+            "Oke, aku sudah update cara baca \"{$subject}\". Ke depannya akan lebih tepat! 👍"
         );
 
         Log::info('Behavioral correction processed', [

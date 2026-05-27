@@ -55,11 +55,12 @@ class Streak extends Model
      */
     public function updateStreak(string $type, string $timezone): void
     {
-        $today = Carbon::now($timezone)->toDateString();
-        $yesterday = Carbon::now($timezone)->subDay()->toDateString();
+        $today         = Carbon::now($timezone)->toDateString();
+        $yesterday     = Carbon::now($timezone)->subDay()->toDateString();
+        $twoDaysAgo    = Carbon::now($timezone)->subDays(2)->toDateString();
 
-        $currentKey = "{$type}_current";
-        $longestKey = "{$type}_longest";
+        $currentKey  = "{$type}_current";
+        $longestKey  = "{$type}_longest";
         $lastDateKey = "{$type}_last_date";
 
         $lastDate = $this->{$lastDateKey} ? $this->{$lastDateKey}->toDateString() : null;
@@ -70,8 +71,13 @@ class Streak extends Model
         }
 
         if ($lastDate === $yesterday) {
+            // Consecutive day — normal increment
+            $this->{$currentKey} += 1;
+        } elseif ($lastDate === $twoDaysAgo) {
+            // Missed exactly one day — 1-day grace: continue the streak
             $this->{$currentKey} += 1;
         } else {
+            // Missed 2+ days — streak resets
             $this->{$currentKey} = 1;
         }
 

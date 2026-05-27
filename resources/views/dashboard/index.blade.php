@@ -1,59 +1,218 @@
 @extends('layouts.dashboard')
-@section('title', 'Dashboard — Butler')
+@section('title', 'Beranda — Butler')
+
 @section('content')
 
-<div class="animate-in">
+{{-- ── Header ────────────────────────────────────────────────── --}}
+<div class="page-header animate-in">
     <h2>Halo, {{ $user->name }} 👋</h2>
-    <p class="page-desc">Ini ringkasan hari ini.</p>
+    <p>{{ today()->translatedFormat('l, d F Y') }}</p>
 </div>
 
-<div class="stat-grid animate-in" style="animation-delay:.05s; margin-top: 24px;">
-    <!-- Today Stats -->
-    <div class="stat-card">
-        <div class="stat-label">Pengeluaran Hari Ini</div>
-        <div class="stat-value" style="color:var(--accent)">Rp {{ number_format($todaySpend, 0, ',', '.') }}</div>
+{{-- ── Total Balance Card ───────────────────────────────────────── --}}
+<div class="card animate-in" style="
+    animation-delay:.02s;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    border: 1px solid rgba(99,102,241,0.3);
+    padding: 24px 28px;
+    margin-bottom: 0;
+">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px">
+
+        {{-- Main total --}}
+        <div>
+            <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:rgba(165,180,252,0.7); margin-bottom:6px">
+                💼 Total Kekayaan
+            </div>
+            <div style="font-size:32px; font-weight:700; color:#a5b4fc; line-height:1.1; letter-spacing:-0.5px">
+                Rp {{ number_format($totalBalance, 0, ',', '.') }}
+            </div>
+            <div style="font-size:12px; color:rgba(165,180,252,0.5); margin-top:6px">
+                Dari {{ $accounts->count() + $sinkingFunds->count() }} akun aktif
+            </div>
+        </div>
+
+        {{-- Breakdown columns --}}
+        <div style="display:flex; gap:32px; flex-wrap:wrap">
+            <div style="text-align:right">
+                <div style="font-size:11px; color:rgba(165,180,252,0.6); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em">Kas & Dompet</div>
+                <div style="font-size:18px; font-weight:600; color:#93c5fd">
+                    Rp {{ number_format($totalAccountBalance, 0, ',', '.') }}
+                </div>
+                <div style="font-size:11px; color:rgba(165,180,252,0.4); margin-top:2px">{{ $accounts->count() }} akun belanja</div>
+            </div>
+            @if($totalSavingsBalance > 0)
+            <div style="text-align:right">
+                <div style="font-size:11px; color:rgba(165,180,252,0.6); margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em">Tabungan & Dana</div>
+                <div style="font-size:18px; font-weight:600; color:#6ee7b7">
+                    Rp {{ number_format($totalSavingsBalance, 0, ',', '.') }}
+                </div>
+                <div style="font-size:11px; color:rgba(165,180,252,0.4); margin-top:2px">{{ $sinkingFunds->count() }} dana aktif</div>
+            </div>
+            @endif
+        </div>
+
+    </div>
+</div>
+
+{{-- ── Today stat cards ────────────────────────────────────────── --}}
+<div class="grid-4 animate-in" style="animation-delay:.04s">
+
+    {{-- Spending today --}}
+    <div class="card stat-card red">
+        <span class="stat-icon">💸</span>
+        <div class="card-title">Pengeluaran Hari Ini</div>
+        <div class="card-value" style="color:#fca5a5">
+            Rp {{ number_format($todaySpend, 0, ',', '.') }}
+        </div>
         @if($user->daily_budget_idr)
-            @php $rem = $user->daily_budget_idr - $todaySpend; @endphp
-            <div class="stat-sub" style="color: {{ $rem >= 0 ? 'var(--success)' : 'var(--err)' }}">
-                {{ $rem >= 0 ? 'Sisa Rp ' . number_format($rem, 0, ',', '.') : 'Over Rp ' . number_format(abs($rem), 0, ',', '.') }}
+            @php $rem = $user->daily_budget_idr - $todaySpend; $pct = min(round($todaySpend / max($user->daily_budget_idr,1) * 100), 100); @endphp
+            <div class="progress-bar" style="margin-top:10px">
+                <div class="progress-fill {{ $rem < 0 ? 'red' : ($pct > 75 ? 'orange' : 'green') }}"
+                     style="width:{{ $pct }}%"></div>
+            </div>
+            <div class="card-subtitle" style="margin-top:6px; color: {{ $rem >= 0 ? 'var(--text-muted)' : 'var(--red)' }}">
+                {{ $rem >= 0 ? 'Sisa Rp '.number_format($rem,0,',','.') : '⚠️ Over Rp '.number_format(abs($rem),0,',','.') }}
             </div>
         @endif
     </div>
 
+    {{-- Monthly spend --}}
+    <div class="card stat-card orange">
+        <span class="stat-icon">📅</span>
+        <div class="card-title">Spending Bulan Ini</div>
+        <div class="card-value" style="color:#fdba74">
+            Rp {{ number_format($monthlySpend, 0, ',', '.') }}
+        </div>
+        @if($user->monthly_budget_idr)
+            @php $mRem = $user->monthly_budget_idr - $monthlySpend; @endphp
+            <div class="card-subtitle" style="color: {{ $mRem >= 0 ? 'var(--text-muted)' : 'var(--red)' }}">
+                {{ $mRem >= 0 ? 'Sisa Rp '.number_format($mRem,0,',','.') : '⚠️ Over Rp '.number_format(abs($mRem),0,',','.') }}
+            </div>
+        @else
+            <div class="card-subtitle">No monthly budget set</div>
+        @endif
+    </div>
+
+    {{-- Monthly income --}}
+    <div class="card stat-card green">
+        <span class="stat-icon">💰</span>
+        <div class="card-title">Income Bulan Ini</div>
+        <div class="card-value" style="color:#86efac">
+            Rp {{ number_format($monthlyIncome, 0, ',', '.') }}
+        </div>
+        @if($monthlySavings > 0)
+            <div class="card-subtitle">+Rp {{ number_format($monthlySavings,0,',','.') }} ditabung</div>
+        @else
+            <div class="card-subtitle" style="color:var(--text-dim)">Belum ada tabungan</div>
+        @endif
+    </div>
+
+    {{-- Calories / streak --}}
     @if($user->isCalorieMode())
-    <div class="stat-card">
-        <div class="stat-label">Kalori Hari Ini</div>
-        <div class="stat-value" style="color:#f59e0b">{{ number_format($todayCalories, 0, ',', '.') }} <span style="font-size:14px;font-weight:400;color:var(--text-muted)">kcal</span></div>
+    <div class="card stat-card yellow">
+        <span class="stat-icon">🔥</span>
+        <div class="card-title">Kalori Hari Ini</div>
+        <div class="card-value" style="color:#fde68a">{{ number_format($todayCalories) }}</div>
         @if($user->daily_calorie_goal)
-            @php $calRem = $user->daily_calorie_goal - $todayCalories; @endphp
-            <div class="stat-sub" style="color: {{ $calRem >= 0 ? 'var(--success)' : 'var(--warning)' }}">
-                {{ $calRem >= 0 ? 'Sisa ' . number_format($calRem) . ' kcal' : 'Lewat ' . number_format(abs($calRem)) . ' kcal' }}
+            @php $cRem = $user->daily_calorie_goal - $todayCalories; $cPct = min(round($todayCalories/max($user->daily_calorie_goal,1)*100),100); @endphp
+            <div class="progress-bar" style="margin-top:10px">
+                <div class="progress-fill {{ $cRem < 0 ? 'red' : ($cPct > 80 ? 'orange' : 'green') }}"
+                     style="width:{{ $cPct }}%"></div>
+            </div>
+            <div class="card-subtitle" style="margin-top:6px">
+                {{ $cRem >= 0 ? 'Sisa '.$cRem.' kcal' : '⚠️ Over '.abs($cRem).' kcal' }}
             </div>
         @endif
+    </div>
+    @else
+    <div class="card stat-card accent">
+        <span class="stat-icon">🔥</span>
+        <div class="card-title">Logging Streak</div>
+        <div class="card-value" style="color:#c4b5fd">{{ $streak?->log_current ?? 0 }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-subtitle">Terpanjang: {{ $streak?->log_longest ?? 0 }} hari</div>
     </div>
     @endif
 
-    <!-- Monthly Stats -->
-    <div class="stat-card" style="background:rgba(239,68,68,0.05);border-color:rgba(239,68,68,0.1)">
-        <div class="stat-label">Total Spending (Bulan Ini)</div>
-        <div class="stat-value" style="color:#fca5a5">Rp {{ number_format($monthlySpend, 0, ',', '.') }}</div>
-        @if($user->monthly_budget_idr)
-            @php $mRem = $user->monthly_budget_idr - $monthlySpend; @endphp
-            <div class="stat-sub" style="color: {{ $mRem >= 0 ? 'var(--success)' : 'var(--err)' }}">
-                {{ $mRem >= 0 ? 'Sisa Rp ' . number_format($mRem, 0, ',', '.') : 'Over Rp ' . number_format(abs($mRem), 0, ',', '.') }}
+</div>
+
+{{-- ── 7-day spending chart + category breakdown ───────────────── --}}
+<div class="grid-2 animate-in" style="animation-delay:.08s">
+
+    <div class="card" style="margin-bottom:0">
+        <div class="card-title">Spending 7 Hari Terakhir</div>
+        <div class="chart-container">
+            <canvas id="weekSpendChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:0">
+        <div class="card-title">Kategori Bulan Ini</div>
+        @if(!empty($categoryBreakdown))
+            <div class="chart-container" style="height:180px">
+                <canvas id="catChart"></canvas>
+            </div>
+            <div style="margin-top:10px">
+                @foreach(array_slice($categoryBreakdown, 0, 4, true) as $cat => $amt)
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px">
+                    <span style="color:var(--text-secondary)">{{ str_replace('_',' ', ucfirst($cat)) }}</span>
+                    <span style="font-weight:600">Rp {{ number_format($amt,0,',','.') }}</span>
+                </div>
+                @endforeach
+            </div>
+        @else
+            <div class="empty-state" style="padding:20px">
+                <div class="empty-icon">📊</div>
+                <p>Belum ada data bulan ini</p>
             </div>
         @endif
     </div>
-    
-    <div class="stat-card" style="background:rgba(16,185,129,0.05);border-color:rgba(16,185,129,0.1)">
-        <div class="stat-label">Total Income (Bulan Ini)</div>
-        <div class="stat-value" style="color:#6ee7b7">Rp {{ number_format($monthlyIncome, 0, ',', '.') }}</div>
-    </div>
+
 </div>
 
+{{-- ── Bills due soon ──────────────────────────────────────────── --}}
+@if($billsDue->isNotEmpty())
+<div class="animate-in" style="animation-delay:.10s">
+    <div class="section-title">⚠️ Tagihan Jatuh Tempo Minggu Ini</div>
+    <div class="table-wrap">
+        @foreach($billsDue as $bill)
+        <div class="account-row">
+            <div>
+                <div class="account-name">{{ $bill->name }}</div>
+                <div class="account-type">Jatuh tempo tgl {{ $bill->due_day }}</div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-weight:700;color:var(--red)">Rp {{ number_format($bill->amount,0,',','.') }}</div>
+                <div style="font-size:11px;color:var(--text-dim)">{{ $bill->due_day - today()->day }} hari lagi</div>
+            </div>
+        </div>
+        @endforeach
+    </div>
+</div>
+@endif
+
+{{-- ── Streak (if calorie mode shows it above, show separate card) --}}
+@if($user->isCalorieMode() && ($streak?->log_current ?? 0) > 0)
+<div class="grid-2 animate-in" style="animation-delay:.11s">
+    <div class="card stat-card accent" style="margin-bottom:0">
+        <span class="stat-icon">🔥</span>
+        <div class="card-title">Logging Streak</div>
+        <div class="card-value" style="color:#c4b5fd">{{ $streak->log_current }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-subtitle">Terpanjang: {{ $streak->log_longest }} hari</div>
+    </div>
+    <div class="card stat-card blue" style="margin-bottom:0">
+        <span class="stat-icon">🍽️</span>
+        <div class="card-title">Meal Streak</div>
+        <div class="card-value" style="color:#93c5fd">{{ $streak->meal_current ?? 0 }} <span style="font-size:16px;font-weight:400">hari</span></div>
+        <div class="card-subtitle">Terpanjang: {{ $streak->meal_longest ?? 0 }} hari</div>
+    </div>
+</div>
+@endif
+
+{{-- ── Accounts ─────────────────────────────────────────────────── --}}
 @if($accounts->isNotEmpty())
-<div class="animate-in" style="animation-delay:.1s">
-    <div class="section-title">Wallets</div>
+<div class="animate-in" style="animation-delay:.12s">
+    <div class="section-title">Akun & Wallet</div>
     <div class="table-wrap">
         @foreach($accounts as $account)
         <div class="account-row">
@@ -64,59 +223,83 @@
                 </div>
                 <div class="account-type">{{ ucfirst($account->type ?? 'Akun') }}</div>
             </div>
-            <div class="account-balance">Rp {{ number_format($account->current_balance, 0, ',', '.') }}</div>
+            <div class="account-balance">Rp {{ number_format($account->current_balance,0,',','.') }}</div>
         </div>
         @endforeach
+        @if($accounts->count() > 1)
+        <div class="account-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:12px">
+            <div>
+                <div class="account-name" style="color:var(--text-muted);font-size:12px">Total Kas & Dompet</div>
+            </div>
+            <div class="account-balance" style="color:#93c5fd">Rp {{ number_format($totalAccountBalance,0,',','.') }}</div>
+        </div>
+        @endif
     </div>
 </div>
 @endif
 
-@if(isset($sinkingFunds) && $sinkingFunds->isNotEmpty())
-<div class="animate-in" style="animation-delay:.15s">
+{{-- ── Sinking funds / goals ────────────────────────────────────── --}}
+@if($sinkingFunds->isNotEmpty())
+<div class="animate-in" style="animation-delay:.14s">
     <div class="section-title">Goals & Sinking Funds</div>
-    <div style="display:flex;flex-direction:column;">
-        @foreach($sinkingFunds as $fund)
-        @php
-            $target = $fund->target_amount ?: 1; // prevent div by zero
-            $pct = min(100, round(($fund->current_balance / $target) * 100));
-        @endphp
-        <div class="fund-card" x-data="{ open: false }" @click="open = !open" style="cursor:pointer; user-select:none;">
-            <div class="fund-header">
-                <div class="fund-name">📁 {{ $fund->name }}</div>
-                <div class="fund-balance">Rp {{ number_format($fund->current_balance, 0, ',', '.') }}</div>
-            </div>
-            <div class="fund-target">Target: Rp {{ number_format($fund->target_amount, 0, ',', '.') }} ({{ $pct }}%)</div>
-            <div class="progress-track">
-                <div class="progress-fill" style="width: {{ $pct }}%"></div>
-            </div>
-            
-            <div x-show="open" x-transition x-cloak style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
-                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Rincian Sumber Dana (Deposit)</div>
-                @if(empty($fund->breakdown))
-                    <div style="font-size: 12px; color: var(--text-dim);">Belum ada setoran tercatat.</div>
-                @else
-                    @foreach($fund->breakdown as $source => $amount)
-                        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px;">
-                            <span style="color:var(--text-muted)">{{ $source }}</span>
-                            <span style="font-weight:500">Rp {{ number_format($amount, 0, ',', '.') }}</span>
-                        </div>
-                    @endforeach
+    @foreach($sinkingFunds as $fund)
+    @php
+        $target  = $fund->target_amount ?: 0;
+        $pct     = $target > 0 ? min(100, round(($fund->current_balance / $target) * 100)) : 0;
+        $onTrack = $fund->on_track ?? null;
+    @endphp
+    <div class="fund-card" x-data="{open:false}" @click="open=!open" style="cursor:pointer;user-select:none">
+        <div class="fund-header">
+            <div class="fund-name">
+                @if($fund->fund_type === 'emergency_fund') 🛡️
+                @elseif($fund->fund_type === 'sinking_fund') ✈️
+                @elseif($fund->fund_type === 'savings') 📈
+                @else 🎯
+                @endif
+                {{ $fund->name }}
+                @if($onTrack !== null)
+                    <span style="font-size:11px;margin-left:6px">{{ $onTrack ? '✅' : '⚠️' }}</span>
                 @endif
             </div>
+            <div class="fund-balance">Rp {{ number_format($fund->current_balance,0,',','.') }}</div>
         </div>
-        @endforeach
+        @if($target > 0)
+        <div class="fund-target">Target: Rp {{ number_format($target,0,',','.') }} · {{ $pct }}%</div>
+        <div class="progress-track">
+            <div class="progress-fill" style="width:{{ $pct }}%;background:{{ $pct >= 100 ? 'var(--green)' : ($pct >= 60 ? 'var(--accent)' : 'var(--text)') }}"></div>
+        </div>
+        @endif
+        @if($fund->target_date)
+        <div style="font-size:11px;color:var(--text-dim);margin-top:6px">
+            Deadline: {{ \Carbon\Carbon::parse($fund->target_date)->format('d M Y') }}
+        </div>
+        @endif
+        <div x-show="open" x-transition x-cloak style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Rincian Setoran</div>
+            @forelse($fund->breakdown ?? [] as $src => $amt)
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                <span style="color:var(--text-muted)">{{ $src }}</span>
+                <span style="font-weight:500">Rp {{ number_format($amt,0,',','.') }}</span>
+            </div>
+            @empty
+            <div style="font-size:12px;color:var(--text-dim)">Belum ada setoran.</div>
+            @endforelse
+        </div>
     </div>
+    @endforeach
 </div>
 @endif
 
-@if(isset($recentActivities) && $recentActivities->isNotEmpty())
-<div class="animate-in" style="animation-delay:.2s">
-    <div class="section-title">Recent Activities</div>
+{{-- ── Recent activity ──────────────────────────────────────────── --}}
+@if($recentActivities->isNotEmpty())
+<div class="animate-in" style="animation-delay:.16s">
+    <div class="section-title">Aktivitas Terbaru</div>
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
                     <th>Aktivitas</th>
+                    <th>Tipe</th>
                     <th style="text-align:right">Nominal</th>
                 </tr>
             </thead>
@@ -124,16 +307,23 @@
                 @foreach($recentActivities as $entry)
                 <tr>
                     <td>
-                        <div style="font-weight:500;color:var(--text)">{{ $entry->note ?: ucfirst($entry->category) }}</div>
-                        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">{{ $entry->entry_time->format('d M H:i') }}</div>
+                        <div style="font-weight:500">
+                            {{ $entry->food_item ?? $entry->note ?? $entry->merchant ?? ucfirst(str_replace('_',' ',$entry->type)) }}
+                        </div>
+                        <div style="font-size:12px;color:var(--text-dim);margin-top:2px">
+                            {{ $entry->entry_time->format('d M · H:i') }}
+                        </div>
                     </td>
+                    <td><span class="badge badge-{{ $entry->type }}">{{ str_replace('_',' ',$entry->type) }}</span></td>
                     <td style="text-align:right">
-                        @if($entry->type === 'expense')
-                            <span class="amount-expense">-Rp {{ number_format($entry->amount, 0, ',', '.') }}</span>
-                        @elseif($entry->type === 'income' || $entry->type === 'saving')
-                            <span class="amount-income">+Rp {{ number_format($entry->amount, 0, ',', '.') }}</span>
+                        @if($entry->type === 'meal')
+                            <span style="color:var(--orange);font-weight:600">{{ $entry->calories ?? 0 }} kcal</span>
+                        @elseif(in_array($entry->type, ['income','saving','sinking_fund_deposit']))
+                            <span class="amount-income">+Rp {{ number_format($entry->amount,0,',','.') }}</span>
+                        @elseif($entry->amount)
+                            <span class="amount-expense">-Rp {{ number_format($entry->amount,0,',','.') }}</span>
                         @else
-                            <span style="font-weight:600">Rp {{ number_format($entry->amount, 0, ',', '.') }}</span>
+                            <span style="color:var(--text-dim)">—</span>
                         @endif
                     </td>
                 </tr>
@@ -144,11 +334,93 @@
 </div>
 @endif
 
-<a href="{{ route('dashboard.history') }}"
-   class="animate-in"
-   style="animation-delay:.25s;display:flex;align-items:center;justify-content:space-between;padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);text-decoration:none;color:var(--text);margin-top:24px;">
-    <span style="font-weight:500">Lihat semua riwayat</span>
+<a href="{{ route('dashboard.history') }}" class="animate-in"
+   style="animation-delay:.18s;display:flex;align-items:center;justify-content:space-between;
+          padding:14px 18px;background:var(--bg-card);border:1px solid var(--border);
+          border-radius:var(--radius);text-decoration:none;color:var(--text-secondary);margin-top:4px">
+    <span style="font-size:13px;font-weight:500">Lihat semua riwayat</span>
     <span style="color:var(--text-dim)">→</span>
 </a>
 
+@endsection
+
+@section('scripts')
+<script>
+// ── 7-day spending line chart ──────────────────────────────────
+const weekData  = @json($spendingChart);
+
+// Build a full 7-day array (fill missing days with 0)
+const days = [];
+const vals = [];
+for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    days.push(d.toLocaleDateString('id-ID', { weekday:'short', day:'numeric' }));
+    vals.push(weekData[key] || 0);
+}
+
+new Chart(document.getElementById('weekSpendChart'), {
+    type: 'line',
+    data: {
+        labels: days,
+        datasets: [{
+            label: 'Spending',
+            data: vals,
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239,68,68,0.08)',
+            fill: true,
+            tension: 0.4,
+            borderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#ef4444',
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => formatRupiah(ctx.parsed.y) } }
+        },
+        scales: {
+            y: { ticks: { callback: v => formatRupiah(v) }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true },
+            x: { grid: { display: false } }
+        }
+    }
+});
+
+// ── Category doughnut ──────────────────────────────────────────
+@if(!empty($categoryBreakdown))
+const catData = @json($categoryBreakdown);
+const catColors = [
+    '#ef4444','#f97316','#eab308','#22c55e',
+    '#3b82f6','#8b5cf6','#ec4899','#06b6d4'
+];
+const catLabels = Object.keys(catData).map(k => k.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase()));
+
+new Chart(document.getElementById('catChart'), {
+    type: 'doughnut',
+    data: {
+        labels: catLabels,
+        datasets: [{
+            data: Object.values(catData),
+            backgroundColor: catColors.slice(0, Object.keys(catData).length),
+            borderWidth: 0,
+            hoverOffset: 6,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '68%',
+        plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ctx.label + ': ' + formatRupiah(ctx.parsed) } }
+        }
+    }
+});
+@endif
+</script>
 @endsection

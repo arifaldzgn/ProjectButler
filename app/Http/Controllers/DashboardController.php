@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 
@@ -39,75 +40,97 @@ class DashboardController extends Controller
     {
         $user = $request->dashboard_user;
 
-        $todaySpend   = Entry::where('user_id', $user->id)
-                             ->where('type', 'expense')
-                             ->whereNotNull('confirmed_at')
-                             ->where('is_undone', false)
-                             ->whereDate('entry_time', today())
-                             ->sum('amount');
+        // ── Today ──────────────────────────────────────────────────
+        $todaySpend    = Entry::where('user_id', $user->id)->where('type', 'expense')
+                              ->whereNotNull('confirmed_at')->where('is_undone', false)
+                              ->whereDate('entry_time', today())->sum('amount');
 
-        $todayCalories = Entry::where('user_id', $user->id)
-                              ->where('type', 'meal')
-                              ->whereNotNull('confirmed_at')
-                              ->where('is_undone', false)
-                              ->whereDate('entry_time', today())
-                              ->sum('calories');
+        $todayCalories = Entry::where('user_id', $user->id)->where('type', 'meal')
+                              ->whereNotNull('confirmed_at')->where('is_undone', false)
+                              ->whereDate('entry_time', today())->sum('calories');
 
-        // Monthly Stats
-        $monthlySpend = Entry::where('user_id', $user->id)
-                             ->where('type', 'expense')
-                             ->whereNotNull('confirmed_at')
-                             ->where('is_undone', false)
-                             ->whereMonth('entry_time', today()->month)
-                             ->whereYear('entry_time', today()->year)
-                             ->sum('amount');
-                             
-        $monthlyIncome = Entry::where('user_id', $user->id)
-                             ->where('type', 'income')
-                             ->whereNotNull('confirmed_at')
-                             ->where('is_undone', false)
-                             ->whereMonth('entry_time', today()->month)
-                             ->whereYear('entry_time', today()->year)
-                             ->sum('amount');
+        $todayIncome   = Entry::where('user_id', $user->id)->where('type', 'income')
+                              ->whereNotNull('confirmed_at')->where('is_undone', false)
+                              ->whereDate('entry_time', today())->sum('amount');
 
-        $accounts = $user->accounts()->orderByDesc('is_default_spending')->get();
+        // ── Month ──────────────────────────────────────────────────
+        $monthlySpend  = Entry::where('user_id', $user->id)->where('type', 'expense')
+                              ->whereNotNull('confirmed_at')->where('is_undone', false)
+                              ->whereMonth('entry_time', today()->month)
+                              ->whereYear('entry_time', today()->year)->sum('amount');
+
+        $monthlyIncome = Entry::where('user_id', $user->id)->where('type', 'income')
+                              ->whereNotNull('confirmed_at')->where('is_undone', false)
+                              ->whereMonth('entry_time', today()->month)
+                              ->whereYear('entry_time', today()->year)->sum('amount');
+
+        $monthlySavings = Entry::where('user_id', $user->id)
+                               ->whereIn('type', ['saving', 'sinking_fund_deposit'])
+                               ->whereNotNull('confirmed_at')->where('is_undone', false)
+                               ->whereMonth('entry_time', today()->month)
+                               ->whereYear('entry_time', today()->year)->sum('amount');
+
+        // ── 7-day spending chart ───────────────────────────────────
+        $spendingChart = Entry::where('user_id', $user->id)->where('type', 'expense')
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(6)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(amount) as total')
+            ->groupBy('day')->orderBy('day')
+            ->pluck('total', 'day')->toArray();
+
+        // ── Category breakdown this month ──────────────────────────
+        $categoryBreakdown = Entry::where('user_id', $user->id)->where('type', 'expense')
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereMonth('entry_time', today()->month)->whereYear('entry_time', today()->year)
+            ->selectRaw('category, SUM(amount) as total')
+            ->groupBy('category')->orderByDesc('total')
+            ->pluck('total', 'category')->toArray();
+
+        // ── Streak ────────────────────────────────────────────────
+        $streak = $user->streak;
+
+        // ── Accounts & Funds ──────────────────────────────────────
+        $accounts    = $user->accounts()->orderByDesc('is_default_spending')->get();
         $sinkingFunds = $user->funds()
-                             ->whereIn('fund_type', ['sinking_fund', 'goal', 'savings'])
-                             ->where('is_active', true)
-                             ->with(['fundTransactions.entry.sourceFund'])
-                             ->get();
-                             
+            ->whereIn('fund_type', ['sinking_fund', 'goal', 'savings', 'emergency_fund'])
+            ->where('is_active', true)
+            ->with(['fundTransactions.entry.sourceFund'])->get();
+
+        // ── Total balance (all active funds) ──────────────────────
+        $totalBalance        = $user->funds()->where('is_active', true)->sum('current_balance');
+        $totalAccountBalance = $user->accounts()->where('is_active', true)->sum('current_balance');
+        $totalSavingsBalance = $user->funds()
+            ->whereIn('fund_type', ['savings', 'emergency_fund', 'sinking_fund', 'goal'])
+            ->where('is_active', true)->sum('current_balance');
+
         foreach ($sinkingFunds as $fund) {
             $breakdown = [];
             foreach ($fund->fundTransactions as $trx) {
                 if ($trx->transaction_type === 'deposit') {
-                    $sourceName = $trx->entry?->sourceFund?->name ?? 'Lainnya';
-                    if (!isset($breakdown[$sourceName])) {
-                        $breakdown[$sourceName] = 0;
-                    }
-                    $breakdown[$sourceName] += $trx->amount;
+                    $src = $trx->entry?->sourceFund?->name ?? 'Lainnya';
+                    $breakdown[$src] = ($breakdown[$src] ?? 0) + $trx->amount;
                 }
             }
             $fund->breakdown = $breakdown;
         }
 
-        $recentActivities = Entry::with('fundTransactions.fund')
-                                 ->where('user_id', $user->id)
-                                 ->whereNotNull('confirmed_at')
-                                 ->where('is_undone', false)
-                                 ->orderByDesc('entry_time')
-                                 ->take(5)
-                                 ->get();
+        // ── Bills due soon ────────────────────────────────────────
+        $billsDue = $user->bills()->active()
+            ->where('this_month_paid', false)
+            ->orderBy('due_day')->get()
+            ->filter(fn($b) => ($b->due_day - today()->day) <= 7 && ($b->due_day - today()->day) >= 0);
+
+        // ── Recent activity ───────────────────────────────────────
+        $recentActivities = Entry::where('user_id', $user->id)
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->orderByDesc('entry_time')->take(6)->get();
 
         return view('dashboard.index', compact(
-            'user', 
-            'todaySpend', 
-            'todayCalories', 
-            'accounts',
-            'monthlySpend',
-            'monthlyIncome',
-            'sinkingFunds',
-            'recentActivities'
+            'user', 'todaySpend', 'todayCalories', 'todayIncome',
+            'monthlySpend', 'monthlyIncome', 'monthlySavings',
+            'spendingChart', 'categoryBreakdown',
+            'streak', 'accounts', 'sinkingFunds', 'billsDue', 'recentActivities',
+            'totalBalance', 'totalAccountBalance', 'totalSavingsBalance'
         ));
     }
 
@@ -133,6 +156,216 @@ class DashboardController extends Controller
         $entries = $query->orderByDesc('entry_time')->paginate(20)->withQueryString();
 
         return view('dashboard.history', compact('user', 'entries'));
+    }
+
+    public function spending(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $monthStart = today()->startOfMonth();
+        $monthEnd   = today()->endOfMonth();
+
+        $monthSpending = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->whereBetween('entry_time', [$monthStart, $monthEnd])
+            ->sum('amount');
+
+        $monthSavings = Entry::where('user_id', $user->id)
+            ->whereIn('type', ['saving', 'sinking_fund_deposit'])
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->whereBetween('entry_time', [$monthStart, $monthEnd])
+            ->sum('amount');
+
+        $totalSavings = Entry::where('user_id', $user->id)
+            ->whereIn('type', ['saving', 'sinking_fund_deposit'])
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->sum('amount');
+
+        $monthBudget = ($user->monthly_budget_idr ?? 0) ?: (($user->daily_budget_idr ?? 0) * 30);
+
+        // Daily spending for last 30 days  ['YYYY-MM-DD' => amount]
+        $dailyRows = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(29)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(amount) as total')
+            ->groupBy('day')
+            ->orderBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        // Category breakdown this month
+        $categoryRows = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->whereBetween('entry_time', [$monthStart, $monthEnd])
+            ->selectRaw('category, SUM(amount) as total')
+            ->groupBy('category')
+            ->orderByDesc('total')
+            ->pluck('total', 'category')
+            ->toArray();
+
+        $transactions = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->orderByDesc('entry_time')
+            ->paginate(20);
+
+        $dailySpending     = $dailyRows;
+        $categoryBreakdown = $categoryRows;
+
+        // Week-over-week comparison
+        $thisWeekSpend = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereBetween('entry_time', [today()->startOfWeek(), today()->endOfWeek()])
+            ->sum('amount');
+
+        $lastWeekSpend = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereBetween('entry_time', [today()->subWeek()->startOfWeek(), today()->subWeek()->endOfWeek()])
+            ->sum('amount');
+
+        $wowChangePct = $lastWeekSpend > 0
+            ? round((($thisWeekSpend - $lastWeekSpend) / $lastWeekSpend) * 100)
+            : null;
+
+        return view('dashboard.spending', compact(
+            'user', 'monthSpending', 'monthBudget', 'monthSavings',
+            'totalSavings', 'dailySpending', 'categoryBreakdown', 'transactions',
+            'thisWeekSpend', 'lastWeekSpend', 'wowChangePct'
+        ));
+    }
+
+    public function nutrition(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $calorieGoal = $user->daily_calorie_goal ?? 2000;
+
+        $todayMeals = Entry::where('user_id', $user->id)
+            ->where('type', 'meal')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->whereDate('entry_time', today())
+            ->orderBy('entry_time')
+            ->get();
+
+        $todayCalories = $todayMeals->sum('calories');
+
+        $todayMacros = [
+            'calories' => $todayCalories,
+            'protein'  => 0,
+            'carbs'    => 0,
+            'fat'      => 0,
+        ];
+
+        // 7-day calorie average
+        $last7 = Entry::where('user_id', $user->id)
+            ->where('type', 'meal')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(6)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(calories) as total')
+            ->groupBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        $avgCalories = count($last7) > 0 ? (int) (array_sum($last7) / count($last7)) : 0;
+
+        // Daily calories for last 30 days
+        $dailyCalories = Entry::where('user_id', $user->id)
+            ->where('type', 'meal')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(29)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(calories) as total')
+            ->groupBy('day')
+            ->orderBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        $recentMeals = Entry::where('user_id', $user->id)
+            ->where('type', 'meal')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->orderByDesc('entry_time')
+            ->take(30)
+            ->get();
+
+        return view('dashboard.nutrition', compact(
+            'user', 'calorieGoal', 'todayMeals', 'todayMacros',
+            'avgCalories', 'dailyCalories', 'recentMeals'
+        ));
+    }
+
+    public function insights(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $calorieGoal = $user->daily_calorie_goal ?? 2000;
+        $monthBudget = ($user->monthly_budget_idr ?? 0) ?: (($user->daily_budget_idr ?? 0) * 30);
+
+        // Daily spending last 30 days
+        $dailySpending = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(29)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(amount) as total')
+            ->groupBy('day')
+            ->orderBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        // Daily calories last 30 days
+        $dailyCalories = Entry::where('user_id', $user->id)
+            ->where('type', 'meal')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->where('entry_time', '>=', now()->subDays(29)->startOfDay())
+            ->selectRaw('DATE(entry_time) as day, SUM(calories) as total')
+            ->groupBy('day')
+            ->orderBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        // Category breakdown this month
+        $categoryBreakdown = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')
+            ->where('is_undone', false)
+            ->whereMonth('entry_time', today()->month)
+            ->whereYear('entry_time', today()->year)
+            ->selectRaw('category, SUM(amount) as total')
+            ->groupBy('category')
+            ->orderByDesc('total')
+            ->pluck('total', 'category')
+            ->toArray();
+
+        // Mood history (table may not exist — guard with try/catch)
+        $moodHistory = [];
+        try {
+            $moodHistory = DB::table('mood_logs')
+                ->where('user_id', $user->id)
+                ->orderByDesc('log_date')
+                ->take(30)
+                ->get(['log_date as date', 'mood_score', 'energy'])
+                ->toArray();
+        } catch (\Exception) {
+            // mood_logs table not available — leave empty
+        }
+
+        return view('dashboard.insights', compact(
+            'user', 'dailySpending', 'dailyCalories',
+            'calorieGoal', 'monthBudget', 'categoryBreakdown', 'moodHistory'
+        ));
     }
 
     // ── API: Entry Edit (with Telegram Undo conflict guard) ───────────────
@@ -165,6 +398,35 @@ class DashboardController extends Controller
         $entry->update(array_filter($validated, fn ($v) => $v !== null));
 
         return response()->json(['ok' => true]);
+    }
+
+    public function settings(Request $request): View
+    {
+        return view('dashboard.settings', ['user' => $request->dashboard_user]);
+    }
+
+    public function saveSettings(Request $request): RedirectResponse
+    {
+        $user = $request->dashboard_user;
+
+        $validated = $request->validate([
+            'name'                  => 'required|string|max:80',
+            'timezone'              => 'required|string|max:60',
+            'currency'              => 'nullable|string|max:10',
+            'tracking_mode'         => 'required|in:finance,calorie,both',
+            'daily_budget_idr'      => 'nullable|integer|min:0',
+            'monthly_budget_idr'    => 'nullable|integer|min:0',
+            'monthly_income_idr'    => 'nullable|integer|min:0',
+            'daily_calorie_goal'    => 'nullable|integer|min:0',
+            'daily_summary_enabled' => 'nullable|boolean',
+            'summary_time'          => 'nullable|string|regex:/^\d{2}:\d{2}$/',
+        ]);
+
+        $validated['daily_summary_enabled'] = $request->boolean('daily_summary_enabled');
+
+        $user->update($validated);
+
+        return redirect()->route('dashboard.settings')->with('success', 'Pengaturan disimpan!');
     }
 
     // ── Dashboard Signed URL Generator (called from TelegramWebhookController) ───

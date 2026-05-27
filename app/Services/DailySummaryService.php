@@ -71,6 +71,8 @@ class DailySummaryService
         $totalCalories = $this->entryService->getTodayCalories($user);
         $totalSaved = $this->entryService->getTotalSavings($user);
         $totalIncome = $this->entryService->getTodayIncome($user);
+        $monthIncome = $this->entryService->getMonthIncome($user);
+        $monthSavings = $this->entryService->getMonthSavings($user);
         $totalBillsPaid = $this->entryService->getTodayBillsPaid($user);
         $budgetRemaining = $this->entryService->getBudgetRemaining($user);
         $streak = $user->streak;
@@ -105,8 +107,9 @@ class DailySummaryService
 
         // Build AI context
         $context = $this->buildSummaryContext(
-            $user, $entries, $totalSpent, $totalIncome, $totalCalories,
-            $totalSaved, $budgetRemaining, $streak, $fundsSnapshot, $billsDue, $debtsDue
+            $user, $entries, $totalSpent, $totalIncome, $monthIncome,
+            $totalCalories, $totalSaved, $monthSavings,
+            $budgetRemaining, $streak, $fundsSnapshot, $billsDue, $debtsDue
         );
 
         // Call AI Prompt B
@@ -114,12 +117,12 @@ class DailySummaryService
         $summaryText = $this->ai->generateSummary($context);
         $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
 
-        $this->aiLog->logSummaryCall($user, json_encode($context), $summaryText, $latencyMs, $summaryText !== null);
+        $this->aiLog->logSummaryCall($user, json_encode($context), $summaryText, $latencyMs, (bool) $summaryText);
 
         if (!$summaryText) {
             $summaryText = $entryCount === 0
                 ? "Hei {$user->name}, belum ada catatan hari ini. Coba ketik pengeluaran terakhir sebelum tidur 😊"
-                : $this->buildFallbackSummary($user, $totalSpent, $totalCalories, $budgetRemaining, $streak);
+                : $this->buildFallbackSummary($user, $totalSpent, $totalCalories, $budgetRemaining, $streak, $monthIncome, $monthSavings);
         }
 
         // Store
@@ -166,8 +169,10 @@ class DailySummaryService
         \Illuminate\Database\Eloquent\Collection $entries,
         int $totalSpent,
         int $totalIncome,
+        int $monthIncome,
         int $totalCalories,
         int $totalSaved,
+        int $monthSavings,
         ?int $budgetRemaining,
         ?\App\Models\Streak $streak,
         array $fundsSnapshot,
@@ -207,11 +212,13 @@ class DailySummaryService
             'date' => $today->translatedFormat('l, d F Y'),
             'entries' => $formattedEntries,
             'totals' => [
-                'spent_idr' => $totalSpent,
-                'income_idr' => $totalIncome,
+                'spent_idr'            => $totalSpent,
+                'income_idr'           => $totalIncome,
+                'month_income_idr'     => $monthIncome > 0 ? $monthIncome : null,
+                'month_savings_idr'    => $monthSavings > 0 ? $monthSavings : null,
                 'budget_remaining_idr' => $budgetRemaining,
-                'calories_consumed' => $totalCalories > 0 ? $totalCalories : null,
-                'calorie_remaining' => $calorieRemaining,
+                'calories_consumed'    => $totalCalories > 0 ? $totalCalories : null,
+                'calorie_remaining'    => $calorieRemaining,
             ],
             'funds' => $fundsSnapshot,
             'upcoming' => [
@@ -236,7 +243,9 @@ class DailySummaryService
         int $totalSpent,
         int $totalCalories,
         ?int $budgetRemaining,
-        ?\App\Models\Streak $streak
+        ?\App\Models\Streak $streak,
+        int $monthIncome = 0,
+        int $monthSavings = 0
     ): string {
         $spentF = number_format($totalSpent, 0, ',', '.');
         $msg = "Hari ini kamu spend Rp {$spentF}.";
@@ -251,6 +260,16 @@ class DailySummaryService
             if ($user->daily_calorie_goal) {
                 $msg .= " / {$user->daily_calorie_goal} kcal";
             }
+        }
+
+        if ($monthIncome > 0) {
+            $monthIncomeF = number_format($monthIncome, 0, ',', '.');
+            $msg .= "\n💰 Income bulan ini: Rp {$monthIncomeF}";
+        }
+
+        if ($monthSavings > 0) {
+            $monthSavingsF = number_format($monthSavings, 0, ',', '.');
+            $msg .= "\n💎 Tabungan bulan ini: Rp {$monthSavingsF}";
         }
 
         $currentStreak = $streak->log_current ?? 0;

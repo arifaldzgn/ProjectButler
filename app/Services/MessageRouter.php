@@ -2,13 +2,16 @@
 
 namespace App\Services;
 
+use App\Jobs\ProcessBehavioralCorrection;
+use App\Jobs\UpdateBehavioralMemory;
 use App\Models\Entry;
 use App\Models\Fund;
+use App\Models\MoodLog;
 use App\Models\User;
-use App\Jobs\UpdateBehavioralMemory;
 use App\Services\BehavioralMemoryService;
 use App\Services\PolicyEngine;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 class MessageRouter
@@ -273,6 +276,26 @@ class MessageRouter
         }
         if (in_array($msg, ['/help', 'help', 'bantuan'])) {
             $this->sendHelp($user, $chatId);
+            return true;
+        }
+        if (in_array($msg, ['/tagihan', 'tagihan', 'list tagihan', 'daftar tagihan'])) {
+            $this->sendBillList($user, $chatId);
+            return true;
+        }
+        if (in_array($msg, ['/settings', 'settings', 'pengaturan', 'ubah profil', 'ganti pengaturan'])) {
+            $this->sendSettingsLink($user, $chatId);
+            return true;
+        }
+        // Mood logging: "mood: good" / "mood: bagus, energi 4" / "mood good"
+        if (str_starts_with($msg, 'mood') && (str_contains($msg, ':') || strlen($msg) > 4)) {
+            if ($this->handleMoodLog($user, $chatId, $message)) {
+                return true;
+            }
+        }
+
+        // Direct balance shortcut — bypass AI entirely
+        if (in_array($msg, ['saldo', 'balance', '/saldo', '/balance', 'cek saldo', 'lihat saldo'])) {
+            $this->handleQueryBalance($user, $chatId, []);
             return true;
         }
 
@@ -983,15 +1006,146 @@ class MessageRouter
         }
 
         if ($user->isCalorieMode()) {
-            $help .= "🍽️ *Makanan:* `makan nasi goreng`\n\n";
+            $help .= "🍽️ *Makanan:* `makan nasi goreng`\n";
+            $help .= "😊 *Mood:* `mood: good, energi 4`\n\n";
         }
 
         $help .= "📊 *Cek Data:*\n"
             . "• `summary` — ringkasan hari ini\n"
-            . "• `saldo dana darurat berapa?`\n"
-            . "• `pengeluaran hari ini?`";
+            . "• `saldo` — semua dana & budget\n"
+            . "• `tagihan` — daftar tagihan\n"
+            . "• `buka dashboard` — webview lengkap\n"
+            . "• `settings` — ubah profil & tujuan\n\n";
+
+        // Add today's live snapshot so help is actually useful
+        if ($user->isFinanceMode()) {
+            $spent     = $this->entries->getTodaySpending($user);
+            $remaining = $this->entries->getBudgetRemaining($user);
+            $spentF    = number_format($spent, 0, ',', '.');
+            $help     .= "📅 *Hari ini:* Rp {$spentF} terpakai";
+            if ($remaining !== null) {
+                $remF  = number_format(abs($remaining), 0, ',', '.');
+                $help .= $remaining >= 0 ? " · sisa Rp {$remF}" : " · ⚠️ lebih Rp {$remF}";
+            }
+            $help .= "\n";
+        }
+
+        if ($user->isCalorieMode()) {
+            $cal  = $this->entries->getTodayCalories($user);
+            $goal = $user->daily_calorie_goal;
+            if ($cal > 0 || $goal) {
+                $help .= "🔥 *Kalori:* {$cal}";
+                if ($goal) $help .= "/{$goal}";
+                $help .= " kcal\n";
+            }
+        }
+
+        $streak = $user->streak;
+        if ($streak && $streak->log_current > 0) {
+            $help .= "🔥 *Streak:* {$streak->log_current} hari";
+        }
 
         $this->telegram->sendMessage($chatId, $help);
+    }
+
+    private function sendBillList(User $user, string $chatId): void
+    {
+        $bills = $user->bills()->active()->orderBy('due_day')->get();
+
+        if ($bills->isEmpty()) {
+            $this->telegram->sendMessage($chatId,
+                "Belum ada tagihan tersimpan.\nTambah dengan: `tambahin tagihan Netflix 65rb tgl 15`"
+            );
+            return;
+        }
+
+        $msg  = "🧾 *Tagihan Tetap*\n──────────────\n";
+        $today = now()->day;
+
+        foreach ($bills as $bill) {
+            $amountF = number_format($bill->amount, 0, ',', '.');
+            $daysLeft = $bill->due_day >= $today
+                ? $bill->due_day - $today
+                : (cal_days_in_month(CAL_GREGORIAN, now()->month, now()->year) - $today + $bill->due_day);
+
+            $paid  = $bill->this_month_paid ? ' ✅' : '';
+            $alert = (!$bill->this_month_paid && $daysLeft <= 3) ? " ⚠️ {$daysLeft}h lagi" : '';
+
+            $msg .= "• *{$bill->name}*: Rp {$amountF}/bln (tgl {$bill->due_day}){$paid}{$alert}\n";
+        }
+
+        $totalF = number_format($bills->sum('amount'), 0, ',', '.');
+        $msg   .= "──────────────\nTotal: Rp {$totalF}/bulan";
+
+        $this->telegram->sendMessage($chatId, $msg);
+    }
+
+    private function sendSettingsLink(User $user, string $chatId): void
+    {
+        $url = URL::temporarySignedRoute(
+            'dashboard.auth',
+            now()->addMinutes(30),
+            ['telegram_id' => $user->telegram_chat_id]
+        );
+
+        $this->telegram->sendMessageWithInlineKeyboard(
+            $chatId,
+            "Buka dashboard untuk ubah profil, budget, dan tujuanmu (berlaku 30 menit):",
+            [['text' => '⚙️ Buka Settings', 'url' => $url]]
+        );
+    }
+
+    private function handleMoodLog(User $user, string $chatId, string $rawMessage): bool
+    {
+        // Parse: "mood: good" / "mood: bagus, energi 4" / "mood good energi 3"
+        $text = strtolower(trim($rawMessage));
+
+        // Strip the "mood:" or "mood " prefix
+        $payload = preg_replace('/^mood\s*:?\s*/i', '', $text);
+
+        // Extract energy level if present: "energi 4" or "energy 4"
+        $energy = null;
+        if (preg_match('/energi\s+([1-5])|energy\s+([1-5])/i', $payload, $m)) {
+            $energy  = (int) ($m[1] ?: $m[2]);
+            $payload = preg_replace('/,?\s*(energi|energy)\s+[1-5]/i', '', $payload);
+        }
+
+        // Extract note after comma: "mood: good, capek banget"
+        $note    = null;
+        $parts   = explode(',', $payload, 2);
+        $moodStr = trim($parts[0]);
+        if (isset($parts[1])) {
+            $noteCandidate = trim($parts[1]);
+            // only treat as note if it's not the energy token we already consumed
+            if (!preg_match('/^energi|^energy/i', $noteCandidate)) {
+                $note = $noteCandidate ?: null;
+            }
+        }
+
+        $mood = MoodLog::parseMood($moodStr);
+        if (!$mood) {
+            return false; // Let AI handle it
+        }
+
+        MoodLog::updateOrCreate(
+            ['telegram_chat_id' => (string) $user->telegram_chat_id, 'log_date' => today()->toDateString()],
+            ['mood' => $mood, 'energy_level' => $energy, 'note' => $note]
+        );
+
+        $moodEmoji = match ($mood) {
+            'great'    => '🤩',
+            'good'     => '😊',
+            'okay'     => '😐',
+            'bad'      => '😔',
+            'terrible' => '😢',
+        };
+
+        $reply = "{$moodEmoji} Mood hari ini: *{$mood}*";
+        if ($energy) $reply .= " · energi {$energy}/5";
+        if ($note)   $reply .= "\n_{$note}_";
+
+        $this->telegram->sendMessage($chatId, $reply);
+        return true;
     }
 
     private function sendQuickSummary(User $user, string $chatId): void
@@ -1148,7 +1302,14 @@ class MessageRouter
             'undo_expires_at' => now()->addMinutes(5),
         ]);
 
-        $msgId = $this->telegram->sendConfirmedWithUndo($chatId, $text, $undoToken);
+        // Build dashboard edit URL so the user can edit from Telegram immediately
+        $editUrl = URL::temporarySignedRoute(
+            'dashboard.auth',
+            now()->addMinutes(30),
+            ['telegram_id' => $user->telegram_chat_id]
+        );
+
+        $msgId = $this->telegram->sendConfirmedWithUndoAndEdit($chatId, $text, $undoToken, $editUrl);
         if ($msgId) {
             $entry->update(['telegram_message_id' => $msgId]);
         }
@@ -1185,6 +1346,22 @@ class MessageRouter
             'source_fund_id'        => $fund->id,
             'source_fund_confirmed' => true,
         ]);
+
+        // Dispatch behavioral correction if user chose a different account than memory suggested
+        if ($entry->merchant) {
+            $memRow = $this->memory->resolve($user->id, 'merchant_account', $entry->merchant);
+            $suggestedFundId = $memRow ? ($memRow->value['account_id'] ?? null) : null;
+            if ($suggestedFundId && (int) $suggestedFundId !== $fund->id) {
+                ProcessBehavioralCorrection::dispatch(
+                    $entry->id,
+                    'wrong_account',
+                    'merchant_account',
+                    $entry->merchant,               // old subject (same merchant)
+                    $entry->merchant,               // new subject (same merchant, new value)
+                    ['account_id' => $fund->id, 'account_name' => $fund->name]
+                )->onQueue('low');
+            }
+        }
 
         // Confirm the entry now that we have an account
         $this->confirmAndSendWithUndo($user, $chatId, $entry);

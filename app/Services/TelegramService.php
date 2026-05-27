@@ -547,6 +547,42 @@ class TelegramService
     }
 
     /**
+     * Send a confirmed entry message with [↩ Undo] and [✏️ Edit] buttons.
+     * The edit button is a URL that opens the dashboard.
+     *
+     * @return int|null  Telegram message_id
+     */
+    public function sendConfirmedWithUndoAndEdit(string $chatId, string $text, string $undoToken, string $editUrl): ?int
+    {
+        $keyboard = ['inline_keyboard' => [[
+            $this->buildUndoButton($undoToken),
+            ['text' => '✏️ Edit', 'url' => $editUrl],
+        ]]];
+
+        try {
+            $response = Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id'      => $chatId,
+                'text'         => $text,
+                'parse_mode'   => 'Markdown',
+                'reply_markup' => json_encode($keyboard),
+            ]);
+
+            if (!$response->successful()) {
+                $response = Http::post("{$this->baseUrl}/sendMessage", [
+                    'chat_id'      => $chatId,
+                    'text'         => $text,
+                    'reply_markup' => json_encode($keyboard),
+                ]);
+            }
+
+            return $response->json('result.message_id');
+        } catch (\Exception $e) {
+            Log::error('Telegram sendConfirmedWithUndoAndEdit failed', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
      * Edit a confirmed message to remove the undo button after expiry or use.
      * Leaves the original text intact, strips the keyboard.
      */
@@ -680,9 +716,22 @@ class TelegramService
         $msg .= "Total hari ini: {$todayCalories} kcal";
 
         if ($calorieGoal) {
-            $pct    = min(round(($todayCalories / max($calorieGoal, 1)) * 100), 100);
-            $status = ($calorieGoal - $todayCalories) > 0 ? '🟢' : '⚠️';
-            $msg .= " / {$calorieGoal} kcal {$status}";
+            $remaining = $calorieGoal - $todayCalories;
+            $ratio     = $todayCalories / max($calorieGoal, 1);
+
+            if ($remaining <= 0) {
+                // Over goal
+                $overF = number_format(abs($remaining), 0, ',', '.');
+                $msg  .= " / {$calorieGoal} kcal ⚠️";
+                $msg  .= "\nMelebihi target {$overF} kcal.";
+            } elseif ($ratio >= 0.80) {
+                // 80–99 % of goal — approaching limit
+                $remF = number_format($remaining, 0, ',', '.');
+                $msg .= " / {$calorieGoal} kcal 🟡";
+                $msg .= "\nSisa {$remF} kcal dari target hari ini.";
+            } else {
+                $msg .= " / {$calorieGoal} kcal 🟢";
+            }
         }
 
         return $msg;
