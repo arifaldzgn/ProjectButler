@@ -113,7 +113,7 @@ class OnboardingController extends Controller
                 'type'               => $accountData['type'],
                 'current_balance'    => $accountData['balance'] ?? 0,
                 'initial_balance'    => $accountData['balance'] ?? 0,
-                'is_default'         => $isDefault,
+                'is_default_spending'=> $isDefault,
                 'is_active'          => true,
             ]);
 
@@ -218,13 +218,18 @@ class OnboardingController extends Controller
         }
 
         $validated = $request->validate([
-            'daily_summary' => 'nullable|boolean',
-            'summary_time'  => 'nullable|date_format:H:i',
+            'daily_summary'    => 'nullable|boolean',
+            'summary_time'     => 'nullable|date_format:H:i',
+            'monthly_reminder' => 'nullable|boolean',
         ]);
+
+        $context = $user->onboarding_context ?? [];
+        $context['monthly_budget_reminder'] = $request->boolean('monthly_reminder', true);
 
         $user->update([
             'daily_summary_enabled' => $request->boolean('daily_summary', true),
             'summary_time'          => ($validated['summary_time'] ?? '21:00') . ':00',
+            'onboarding_context'    => $context,
             'onboarding_step'       => 'notifications_done',
         ]);
 

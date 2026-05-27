@@ -17,6 +17,7 @@
             --accent: #ffffff; --success: #22c55e; --warning: #f59e0b; --err: #ef4444;
             --radius: 12px; --radius-sm: 8px;
         }
+        /* ... keeping existing styles ... */
         html, body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif;
             font-size: 14px; line-height: 1.6; min-height: 100dvh; -webkit-font-smoothing: antialiased; }
         .layout { max-width: 720px; margin: 0 auto; padding: 0 20px; }
@@ -38,7 +39,7 @@
         .stat-label { font-size: 11px; color: var(--text-dim); letter-spacing: 0.08em;
             text-transform: uppercase; margin-bottom: 8px; }
         .stat-value { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
-        .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        .stat-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
         .table-wrap { background: var(--bg-card); border: 1px solid var(--border);
             border-radius: var(--radius); overflow: hidden; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -70,6 +71,19 @@
         .account-balance { font-size: 15px; font-weight: 700; }
         .default-badge { font-size: 10px; background: rgba(255,255,255,0.07);
             color: var(--text-muted); padding: 2px 7px; border-radius: 4px; margin-left: 6px; }
+            
+        .fund-card { display: flex; flex-direction: column; padding: 16px; background: var(--bg-card); 
+            border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+        .fund-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+        .fund-name { font-weight: 600; font-size: 14px; }
+        .fund-balance { font-size: 15px; font-weight: 700; color: var(--accent); }
+        .fund-target { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+        .progress-track { height: 6px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; margin-top: auto; }
+        .progress-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+        
+        .section-title { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; 
+            color: var(--text-dim); margin-bottom: 12px; margin-top: 32px; }
+            
         h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
         .page-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
         .pagination { display: flex; gap: 6px; justify-content: center; padding: 20px 0; }
@@ -81,15 +95,54 @@
         @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .animate-in { animation: fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
         [x-cloak] { display: none !important; }
+        
+        /* Admin Banner */
+        .admin-banner {
+            background: #f59e0b;
+            color: #000;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .admin-banner form { margin: 0; }
+        .admin-banner button {
+            background: rgba(0,0,0,0.1);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            color: #000;
+            transition: background 0.15s;
+        }
+        .admin-banner button:hover { background: rgba(0,0,0,0.2); }
     </style>
 </head>
 <body>
+
+@if(session()->has('admin_impersonator_id'))
+    <div class="admin-banner">
+        <span>⚠️ Admin Override: You are viewing {{ request()->dashboard_user?->name ?? 'User' }}'s dashboard.</span>
+        <form action="{{ route('admin.impersonate.leave') }}" method="POST">
+            @csrf
+            <button type="submit">Return to Admin Panel</button>
+        </form>
+    </div>
+@endif
+
 <nav>
     <div class="nav-inner">
         <div class="nav-brand">Butler</div>
         <div class="nav-links">
             <a href="{{ route('dashboard.index') }}"   class="nav-link {{ request()->routeIs('dashboard.index')   ? 'active' : '' }}">Beranda</a>
             <a href="{{ route('dashboard.history') }}" class="nav-link {{ request()->routeIs('dashboard.history') ? 'active' : '' }}">Riwayat</a>
+            
+            @if(request()->dashboard_user && request()->dashboard_user->isAdmin() && !session()->has('admin_impersonator_id'))
+                <a href="{{ route('admin.users.index') }}" class="nav-link {{ request()->routeIs('admin.users.*') ? 'active' : '' }}" style="color:var(--warning)">Admin</a>
+            @endif
         </div>
     </div>
 </nav>

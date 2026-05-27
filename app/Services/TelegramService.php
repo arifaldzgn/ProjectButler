@@ -460,10 +460,11 @@ class TelegramService
     {
         $fundName = $parsed['fund_name'] ?? 'Sinking Fund';
         $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $deductedFrom = !empty($parsed['deducted_from']) ? " (dari {$parsed['deducted_from']})" : '';
 
         return "✈️ *Setoran sinking fund terdeteksi:*\n\n"
             . "📁 {$fundName}\n"
-            . "💰 Rp {$amount}\n";
+            . "💰 Rp {$amount}{$deductedFrom}\n";
     }
 
     /**
@@ -493,14 +494,15 @@ class TelegramService
      */
     public function formatConfirmedMessage(string $type, array $parsed, int $todayTotal, ?int $remaining = null): string
     {
+        $deductedFrom = !empty($parsed['deducted_from']) ? " (dari {$parsed['deducted_from']})" : '';
         return match ($type) {
             'expense'              => $this->formatExpenseConfirmed($parsed, $todayTotal, $remaining),
             'meal'                 => $this->formatMealConfirmed($parsed, $todayTotal, $remaining),
             'saving'               => $this->formatSavingConfirmed($parsed, $todayTotal),
             'income'               => 'Dicatat.\nIncome Rp ' . number_format($parsed['amount'] ?? 0, 0, ',', '.') . ' masuk.',
-            'bill_payment'         => 'Tagihan ' . ($parsed['bill_name'] ?? 'Tagihan') . ' dibayar.',
-            'debt_payment'         => 'Cicilan ' . ($parsed['debt_name'] ?? 'Cicilan') . ' dibayar.',
-            'sinking_fund_deposit' => 'Setoran ke ' . ($parsed['fund_name'] ?? 'Dana') . ' disimpan.',
+            'bill_payment'         => 'Tagihan ' . ($parsed['bill_name'] ?? 'Tagihan') . ' dibayar' . $deductedFrom . '.',
+            'debt_payment'         => 'Cicilan ' . ($parsed['debt_name'] ?? 'Cicilan') . ' dibayar' . $deductedFrom . '.',
+            'sinking_fund_deposit' => 'Setoran ke ' . ($parsed['fund_name'] ?? 'Dana') . ' disimpan' . $deductedFrom . '.',
             'transfer'             => 'Transfer Rp ' . number_format($parsed['amount'] ?? 0, 0, ',', '.') . ' selesai.',
             default                => 'Dicatat.',
         };
@@ -652,8 +654,9 @@ class TelegramService
         $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
         $todayF = number_format($todayTotal, 0, ',', '.');
         $note   = $parsed['note'] ?? ($parsed['category'] ?? '-');
+        $deductedFrom = !empty($parsed['deducted_from']) ? " (dari {$parsed['deducted_from']})" : '';
 
-        $msg = "Tercatat: {$note} • Rp {$amount}\n";
+        $msg = "Tercatat: {$note} • Rp {$amount}{$deductedFrom}\n";
         $msg .= "Total hari ini: Rp {$todayF}";
 
         if ($remaining !== null) {

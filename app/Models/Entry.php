@@ -86,6 +86,11 @@ class Entry extends Model
         return $this->belongsTo(Fund::class, 'source_fund_id');
     }
 
+    public function fundTransactions()
+    {
+        return $this->hasMany(FundTransaction::class);
+    }
+
     // ── Scopes ─────────────────────────────────────────────────────────
 
     public function scopeForUser($query, int $userId)

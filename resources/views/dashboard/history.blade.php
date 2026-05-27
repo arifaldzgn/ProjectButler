@@ -66,6 +66,14 @@
                         <span class="{{ in_array($entry->type, ['income']) ? 'amount-income' : 'amount-expense' }}">
                             {{ in_array($entry->type, ['income']) ? '+' : '−' }}Rp {{ number_format($entry->amount, 0, ',', '.') }}
                         </span>
+                        @if($entry->fundTransactions && $entry->fundTransactions->isNotEmpty())
+                            @foreach($entry->fundTransactions as $trx)
+                                <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">
+                                    {{ $trx->fund->name ?? 'Fund' }}:<br>
+                                    {{ number_format($trx->balance_before, 0, ',', '.') }} &rarr; {{ number_format($trx->balance_after, 0, ',', '.') }}
+                                </div>
+                            @endforeach
+                        @endif
                     @else
                         <span style="color:var(--text-dim)">—</span>
                     @endif

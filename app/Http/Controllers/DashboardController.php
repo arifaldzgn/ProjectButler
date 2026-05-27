@@ -53,16 +53,70 @@ class DashboardController extends Controller
                               ->whereDate('entry_time', today())
                               ->sum('calories');
 
-        $accounts = $user->accounts()->orderByDesc('is_default_spending')->get();
+        // Monthly Stats
+        $monthlySpend = Entry::where('user_id', $user->id)
+                             ->where('type', 'expense')
+                             ->whereNotNull('confirmed_at')
+                             ->where('is_undone', false)
+                             ->whereMonth('entry_time', today()->month)
+                             ->whereYear('entry_time', today()->year)
+                             ->sum('amount');
+                             
+        $monthlyIncome = Entry::where('user_id', $user->id)
+                             ->where('type', 'income')
+                             ->whereNotNull('confirmed_at')
+                             ->where('is_undone', false)
+                             ->whereMonth('entry_time', today()->month)
+                             ->whereYear('entry_time', today()->year)
+                             ->sum('amount');
 
-        return view('dashboard.index', compact('user', 'todaySpend', 'todayCalories', 'accounts'));
+        $accounts = $user->accounts()->orderByDesc('is_default_spending')->get();
+        $sinkingFunds = $user->funds()
+                             ->whereIn('fund_type', ['sinking_fund', 'goal', 'savings'])
+                             ->where('is_active', true)
+                             ->with(['fundTransactions.entry.sourceFund'])
+                             ->get();
+                             
+        foreach ($sinkingFunds as $fund) {
+            $breakdown = [];
+            foreach ($fund->fundTransactions as $trx) {
+                if ($trx->transaction_type === 'deposit') {
+                    $sourceName = $trx->entry?->sourceFund?->name ?? 'Lainnya';
+                    if (!isset($breakdown[$sourceName])) {
+                        $breakdown[$sourceName] = 0;
+                    }
+                    $breakdown[$sourceName] += $trx->amount;
+                }
+            }
+            $fund->breakdown = $breakdown;
+        }
+
+        $recentActivities = Entry::with('fundTransactions.fund')
+                                 ->where('user_id', $user->id)
+                                 ->whereNotNull('confirmed_at')
+                                 ->where('is_undone', false)
+                                 ->orderByDesc('entry_time')
+                                 ->take(5)
+                                 ->get();
+
+        return view('dashboard.index', compact(
+            'user', 
+            'todaySpend', 
+            'todayCalories', 
+            'accounts',
+            'monthlySpend',
+            'monthlyIncome',
+            'sinkingFunds',
+            'recentActivities'
+        ));
     }
 
     public function history(Request $request): View
     {
         $user = $request->dashboard_user;
 
-        $query = Entry::where('user_id', $user->id)
+        $query = Entry::with('fundTransactions.fund')
+                      ->where('user_id', $user->id)
                       ->whereNotNull('confirmed_at')
                       ->where('is_undone', false);
 

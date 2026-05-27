@@ -6,11 +6,11 @@ use Illuminate\Support\Facades\Log;
 
 class AIService
 {
-    private GeminiClient $gemini;
+    private OpenRouterClient $aiClient;
 
-    public function __construct(GeminiClient $gemini)
+    public function __construct(OpenRouterClient $aiClient)
     {
-        $this->gemini = $gemini;
+        $this->aiClient = $aiClient;
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -27,12 +27,15 @@ class AIService
         $startTime = microtime(true);
 
         try {
-            $result = $this->gemini->generateJson($systemPrompt, $message);
+            $response = $this->aiClient->generateJson($systemPrompt, $message);
             $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
 
-            if (!$result) {
+            if (!$response || !isset($response['data'])) {
                 return null;
             }
+
+            $result = $response['data'];
+            $modelUsed = $response['model_used'] ?? 'unknown';
 
             if (isset($result[0]) && !isset($result['intent'])) {
                 $result = $result[0];
@@ -56,6 +59,7 @@ class AIService
             }
 
             $result['_latency_ms'] = $latencyMs;
+            $result['_model_used'] = $modelUsed;
             return $result;
 
         } catch (\Exception $e) {
@@ -81,8 +85,8 @@ Angka bisa disingkat seperti '5jt' -> 5000000, '500rb' -> 500000.
 PROMPT;
 
         try {
-            $parsed = $this->gemini->generateJson($systemPrompt, $message);
-            return is_array($parsed) ? $parsed : [];
+            $response = $this->aiClient->generateJson($systemPrompt, $message);
+            return isset($response['data']) && is_array($response['data']) ? $response['data'] : [];
         } catch (\Exception $e) {
             Log::error('AI onboarding combo parser exception', ['message' => $e->getMessage()]);
             return [];
@@ -99,7 +103,11 @@ PROMPT;
         $userContent = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
 
         try {
-            return $this->gemini->generateText($systemPrompt, $userContent);
+            $response = $this->aiClient->generateText($systemPrompt, $userContent);
+            if ($response && isset($response['text'])) {
+                return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
+            }
+            return null;
         } catch (\Exception $e) {
             Log::error('AI summary generation failed', ['error' => $e->getMessage()]);
             return null;
@@ -124,8 +132,11 @@ Kalau user kayaknya mau log sesuatu, ingatkan format yang bisa dipakai:
 Jangan pernah kasih error teknis. Selalu kasih jalan keluar kalau bingung.
 PROMPT;
 
-        $response = $this->gemini->generateText($prompt, $message);
-        return $response ?? 'Hmm, Butler lagi error nih 😅 Coba lagi ya!';
+        $response = $this->aiClient->generateText($prompt, $message);
+        if ($response && isset($response['text'])) {
+            return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
+        }
+        return 'Hmm, Butler lagi error nih 😅 Coba lagi ya!';
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -234,9 +245,10 @@ Triggers: "bayar cicilan", "bayar KPR", "cicilan motor", "paylater"
   "confidence": <0.000–1.000>,
   "amount": <number IDR>,
   "fund_name": "<fund name user mentioned>",
+  "account_name": "<source fund or wallet mentioned (e.g. BCA, GoPay), or null>",
   "note": "<null>"
 }
-Triggers: "nabung ke liburan", "masukin 300k ke nabung laptop"
+Triggers: "nabung ke liburan dari bca", "masukin 300k ke nabung laptop"
 
 8. add_bill — user wants to register a new recurring bill
 {

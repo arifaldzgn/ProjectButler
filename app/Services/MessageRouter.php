@@ -96,12 +96,11 @@ class MessageRouter
         $intent = $parsed['intent'] ?? 'unknown';
         $confidence = (float) ($parsed['confidence'] ?? 0.5);
 
-        if (config('app.debug')) {
-            $confStr = number_format($confidence, 2);
-            $latency = $parsed['_latency_ms'] ?? $latencyMs;
-            $debugMsg = "🤖 *AI Debug*\nIntent: `{$intent}`\nConf: `{$confStr}`\nLatency: `{$latency}ms`";
-            $this->telegram->setDebugContext($debugMsg);
-        }
+        $confStr = number_format($confidence, 2);
+        $latency = $parsed['_latency_ms'] ?? $latencyMs;
+        $modelUsed = $parsed['_model_used'] ?? 'unknown';
+        $debugMsg = "🤖 *AI Debug*\nModel: `{$modelUsed}`\nIntent: `{$intent}`\nConf: `{$confStr}`\nLatency: `{$latency}ms`";
+        $this->telegram->setDebugContext($debugMsg);
 
         // Loggable entry intents (including dual log)
         $logIntents = ['log_expense', 'log_meal', 'log_saving', 'log_income',
@@ -320,7 +319,7 @@ class MessageRouter
         $entry = $this->entries->createPendingEntry($user, $parsed, $rawMessage);
 
         // ── v2.1: Resolve → Policy pipeline for expense entries ───────
-        if (in_array($intent, ['log_expense', 'log_bill_payment', 'log_meal_and_expense'])) {
+        if (in_array($intent, ['log_expense', 'log_bill_payment', 'log_meal_and_expense', 'log_sinking_deposit'])) {
             [$accountSource, $accountConfidence, $autoApply, $resolvedFund] =
                 $this->resolveAccountForEntry($user, $parsed, $entry);
 
@@ -343,8 +342,13 @@ class MessageRouter
             }
 
             // explicit_input or auto_apply: assign fund and confirm directly
-            if ($resolvedFund && !$entry->source_fund_id) {
-                $entry->update(['source_fund_id' => $resolvedFund->id, 'source_fund_confirmed' => true]);
+            if ($resolvedFund) {
+                if (!$entry->source_fund_id) {
+                    $entry->update(['source_fund_id' => $resolvedFund->id, 'source_fund_confirmed' => true]);
+                }
+                $parsed['deducted_from'] = $resolvedFund->name;
+            } else {
+                $parsed['deducted_from'] = $user->getDefaultSpendingFund()?->name ?? 'Akun Utama';
             }
         }
 
@@ -406,14 +410,21 @@ class MessageRouter
                 'category'   => $parsed['category'] ?? 'food_drink',
                 'merchant'   => $parsed['merchant'] ?? null,
                 'note'       => $parsed['food_item'] ?? $parsed['note'] ?? null,
+                'fund_name'  => $parsed['account_name'] ?? $parsed['fund_name'] ?? null,
             ];
             $expenseEntry = $this->entries->createPendingEntry($user, $expenseParsed, $rawMessage);
             $this->entries->confirmEntry($expenseEntry);
             $this->streaks->updateAfterConfirmation($user, 'expense');
+            $this->applyFundEffect($user, $expenseEntry);
+            $this->applyBillDebtEffect($user, $expenseEntry);
+            
+            $expenseEntry->load('sourceFund');
+            $fundName   = $expenseEntry->sourceFund ? $expenseEntry->sourceFund->name : 'Akun Utama';
+            
             $totalSpent = $this->entries->getTodaySpending($user);
             $remaining  = $this->entries->getBudgetRemaining($user);
             $spentF     = number_format($totalSpent, 0, ',', '.');
-            $line       = "💸 *Rp " . number_format($parsed['amount'], 0, ',', '.') . "* dicatat.\n   Total hari ini: Rp {$spentF}";
+            $line       = "💸 *Rp " . number_format($parsed['amount'], 0, ',', '.') . "* dicatat (dari {$fundName}).\n   Total hari ini: Rp {$spentF}";
             if ($remaining !== null) {
                 $remF = number_format(abs($remaining), 0, ',', '.');
                 $line .= $remaining >= 0 ? " | Sisa: Rp {$remF}" : " | ⚠️ Melebihi budget Rp {$remF}";
@@ -641,6 +652,22 @@ class MessageRouter
                     break;
 
                 case 'sinking_fund_deposit':
+                    // Debit the source fund
+                    $sourceFund = null;
+                    if ($entry->source_fund_id) {
+                        $sourceFund = \App\Models\Fund::find($entry->source_fund_id);
+                    }
+                    if (!$sourceFund) {
+                        $sourceFund = $user->getDefaultSpendingFund();
+                    }
+                    if ($sourceFund) {
+                        $this->funds->debitFund($sourceFund, $entry->amount, $entry->id, 'Setoran Sinking Fund');
+                        if (!$entry->source_fund_id || $entry->source_fund_id !== $sourceFund->id) {
+                            $entry->update(['source_fund_id' => $sourceFund->id, 'source_fund_confirmed' => true]);
+                        }
+                    }
+
+                    // Credit the target sinking fund
                     $fundName = $metadata['fund_name'] ?? $entry->note;
                     $fund = null;
                     if ($fundName) {
@@ -650,7 +677,7 @@ class MessageRouter
                         $fund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'sinking_fund')->first();
                     }
                     if ($fund) {
-                        $this->funds->creditFund($fund, $entry->amount, $entry->id);
+                        $this->funds->creditFund($fund, $entry->amount, $entry->id, 'Setoran Sinking Fund');
                     }
                     break;
 
@@ -1072,7 +1099,7 @@ class MessageRouter
      */
     private function askAccountSelection(string $chatId, int $entryId, User $user): void
     {
-        $funds = $this->funds->getFundsForUser($user);
+        $funds = $this->funds->getFundsForUser($user)->where('fund_type', 'spending_budget');
         if ($funds->isEmpty()) {
             $this->telegram->sendMessage($chatId, 'Belum ada akun yang tersimpan. Set up dulu di /setup.');
             return;
@@ -1109,6 +1136,10 @@ class MessageRouter
         $todayTotal = $this->getTodayTotalForType($user, $entry->type);
         $remaining  = $this->getRemainingForType($user, $entry->type);
         $parsedArr  = $this->entryToParsedArray($entry);
+        
+        $fundName = $entry->sourceFund ? $entry->sourceFund->name : 'Akun Utama';
+        $parsedArr['deducted_from'] = $fundName;
+        
         $text       = $this->telegram->formatConfirmedMessage($entry->type, $parsedArr, $todayTotal, $remaining);
 
         $undoToken  = \Illuminate\Support\Str::random(16);
@@ -1184,12 +1215,16 @@ class MessageRouter
             return;
         }
 
-        // Reverse balance
-        if ($entry->source_fund_id) {
-            $fund = Fund::find($entry->source_fund_id);
-            if ($fund && $entry->isFinancial()) {
-                // Re-credit the fund (reverse the debit)
-                $this->funds->creditFund($fund, $entry->amount, $entry->id, 'Undo entry');
+        // Reverse all fund transactions
+        $transactions = \App\Models\FundTransaction::where('entry_id', $entry->id)->get();
+        foreach ($transactions as $trx) {
+            $fund = \App\Models\Fund::find($trx->fund_id);
+            if ($fund) {
+                if ($trx->transaction_type === 'deposit') {
+                    $this->funds->debitFund($fund, $trx->amount, $entry->id, 'Undo entry');
+                } elseif ($trx->transaction_type === 'withdrawal') {
+                    $this->funds->creditFund($fund, $trx->amount, $entry->id, 'Undo entry');
+                }
             }
         }
 

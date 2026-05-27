@@ -13,6 +13,7 @@ class User extends Authenticatable
     use HasFactory;
 
     protected $fillable = [
+        'is_admin',
         'name',
         'telegram_chat_id',
         'telegram_username',
@@ -52,6 +53,7 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
+            'is_admin'              => 'boolean',
             'telegram_chat_id'      => 'integer',
             'default_account_id'    => 'integer',
             'daily_budget_idr'      => 'integer',
@@ -138,6 +140,11 @@ class User extends Authenticatable
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+
+    public function isAdmin(): bool
+    {
+        return $this->is_admin === true;
+    }
 
     public function isOnboardingComplete(): bool
     {

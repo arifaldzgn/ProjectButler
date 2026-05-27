@@ -17,10 +17,11 @@ return [
         'webhook_url' => env('TELEGRAM_WEBHOOK_URL'),
     ],
 
-    'gemini' => [
-        'api_key' => env('GEMINI_API_KEY'),
-        'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
-        'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
+    'ai' => [
+        'api_key' => env('AI_API_KEY'),
+        'base_url' => env('AI_BASE_URL', 'https://openrouter.ai/api/v1/chat/completions'),
+        'primary_model' => env('AI_PRIMARY_MODEL', 'google/gemini-2.0-flash-lite-preview-02-05:free'),
+        'fallback_model' => env('AI_FALLBACK_MODEL', 'meta-llama/llama-3.3-70b-instruct:free'),
     ],
 
     // Default timezone (used for scheduling; users have their own timezone)

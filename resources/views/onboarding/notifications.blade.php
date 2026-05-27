@@ -15,11 +15,11 @@
 
 <form method="POST" action="{{ route('onboarding.notifications.save', $telegram_id) }}"
       class="form-body animate-in animate-in-delay-2"
-      x-data="{ enabled: true }">
+      x-data="{ enabled: true, monthlyReminder: true }">
     @csrf
 
-    <label class="toggle-row" :class="{ 'is-on': enabled }" @click="enabled = !enabled">
-        <input type="checkbox" name="daily_summary" value="1" x-model="enabled" checked>
+    <label class="toggle-row" :class="{ 'is-on': enabled }">
+        <input type="checkbox" name="daily_summary" value="1" x-model="enabled">
         <div class="toggle-visual"></div>
         <div>
             <div class="toggle-label">Aktifkan ringkasan harian</div>
@@ -33,6 +33,15 @@
             <input type="time" id="summary_time" name="summary_time" value="21:00">
         </div>
     </div>
+
+    <label class="toggle-row" :class="{ 'is-on': monthlyReminder }" style="margin-top:24px">
+        <input type="checkbox" name="monthly_reminder" value="1" x-model="monthlyReminder">
+        <div class="toggle-visual"></div>
+        <div>
+            <div class="toggle-label">Reminder awal bulan</div>
+            <div class="toggle-desc">Mengingatkan kamu untuk set ulang budget harian/bulanan di tanggal 1</div>
+        </div>
+    </label>
 
     <div class="form-footer">
         <button type="submit" class="btn btn-primary">Selesai →</button>

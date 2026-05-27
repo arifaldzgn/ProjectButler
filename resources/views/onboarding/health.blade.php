@@ -18,7 +18,7 @@
       x-data="{ track: false }">
     @csrf
 
-    <label class="toggle-row" :class="{ 'is-on': track }" @click="track = !track">
+    <label class="toggle-row" :class="{ 'is-on': track }">
         <input type="checkbox" name="calorie_tracking" value="1" x-model="track">
         <div class="toggle-visual"></div>
         <div>
@@ -37,15 +37,14 @@
 
         <div class="field">
             <label class="field-label">Tujuan kesehatan</label>
-            <div class="chips" style="margin-top:4px">
+            <div class="chips" style="margin-top:4px" x-data="{ selectedGoal: '{{ old('health_goal') }}' }">
                 @foreach(['maintain' => 'Maintain berat', 'lose' => 'Turunkan berat', 'gain' => 'Naikkan berat', 'protein' => 'Tambah protein'] as $val => $label)
                 <button type="button" class="chip"
-                        x-data="{ active: false }"
-                        :class="{ active }"
-                        @click="active = !active; document.getElementById('health_goal').value = active ? '{{ $val }}' : ''"
+                        :class="{ active: selectedGoal === '{{ $val }}' }"
+                        @click="selectedGoal = selectedGoal === '{{ $val }}' ? '' : '{{ $val }}'; document.getElementById('health_goal').value = selectedGoal"
                         >{{ $label }}</button>
                 @endforeach
-                <input type="hidden" id="health_goal" name="health_goal" value="{{ old('health_goal') }}">
+                <input type="hidden" id="health_goal" name="health_goal" :value="selectedGoal">
             </div>
         </div>
     </div>

@@ -36,9 +36,10 @@
                 </div>
                 <button type="button" class="remove-btn" @click="remove(index)">✕</button>
             </div>
-            <input type="number" placeholder="Saldo awal (opsional)"
-                   x-model="account.balance"
-                   style="margin-top:12px" min="0">
+            <input type="text" placeholder="Saldo awal (opsional)"
+                   x-model="account.formatted_balance"
+                   @input="formatBalance(index, $event.target.value)"
+                   style="margin-top:12px">
             <div class="radio-row" @click="defaultIndex = index">
                 <div class="radio-visual" :class="{ 'is-checked': defaultIndex === index }"></div>
                 <span>Akun utama untuk pengeluaran harian</span>
@@ -118,7 +119,7 @@ function accountManager() {
                 this.accounts = this.accounts.filter(a => a.name !== s.name);
                 if (this.defaultIndex >= this.accounts.length) this.defaultIndex = 0;
             } else {
-                this.accounts.push({ name: s.name, type: s.type, type_label: s.type_label, balance: '' });
+                this.accounts.push({ name: s.name, type: s.type, type_label: s.type_label, balance: '', formatted_balance: '' });
             }
         },
         addCustom() {
@@ -128,7 +129,8 @@ function accountManager() {
                 name: this.customName.trim(),
                 type: this.customType,
                 type_label: labels[this.customType],
-                balance: ''
+                balance: '',
+                formatted_balance: ''
             });
             this.customName = '';
             this.showCustomForm = false;
@@ -136,6 +138,15 @@ function accountManager() {
         remove(index) {
             this.accounts.splice(index, 1);
             if (this.defaultIndex >= this.accounts.length) this.defaultIndex = 0;
+        },
+        formatBalance(index, val) {
+            let num = val.toString().replace(/\D/g, '');
+            this.accounts[index].balance = num;
+            if (num) {
+                this.accounts[index].formatted_balance = parseInt(num).toLocaleString('en-US'); // en-US gives comma separator like 1,000,000
+            } else {
+                this.accounts[index].formatted_balance = '';
+            }
         },
         submitForm() {
             if (this.accounts.length === 0) return;
