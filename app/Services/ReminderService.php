@@ -115,6 +115,7 @@ class ReminderService
 
     /**
      * Bill due reminders — check bills due within remind_days_before.
+     * Respects each bill's optional reminder_time (defaults to system 09:00).
      */
     public function processBillDueReminders(): int
     {
@@ -122,13 +123,23 @@ class ReminderService
         $users = User::where('onboarding_step', 'complete')->get();
 
         foreach ($users as $user) {
-            $tz = $user->timezone ?? 'Asia/Jakarta';
-            $todayStr = now()->timezone($tz)->toDateString();
+            $tz       = $user->timezone ?? 'Asia/Jakarta';
+            $nowLocal = now()->timezone($tz);
+            $nowHm    = $nowLocal->format('H:i');
+            $todayStr = $nowLocal->toDateString();
 
             $bills = $user->bills()->active()->unpaidThisMonth()->get()
                 ->filter(fn($b) => $b->auto_remind && $b->isDueWithin($b->remind_days_before, $tz));
 
             foreach ($bills as $bill) {
+                // Respect per-bill reminder_time; default to system '09:00'
+                $billTime = $bill->reminder_time
+                    ? Carbon::parse($bill->reminder_time)->format('H:i')
+                    : '09:00';
+
+                // Only fire within the correct minute window
+                if ($nowHm !== $billTime) continue;
+
                 // Don't re-nudge today
                 $alreadyNudged = Reminder::forUser($user->id)
                     ->where('linked_bill_id', $bill->id)
@@ -140,7 +151,6 @@ class ReminderService
                 $msg = "⏰ *Tagihan jatuh tempo!*\n\n📋 {$bill->name}\n💰 {$amountF}\n📅 Tanggal {$bill->due_day}";
 
                 if ($this->telegram->sendMessage((string) $user->telegram_chat_id, $msg)) {
-                    // Create or update bill_due reminder for tracking
                     $billReminder = Reminder::forUser($user->id)
                         ->where('linked_bill_id', $bill->id)->first();
                     if ($billReminder) {

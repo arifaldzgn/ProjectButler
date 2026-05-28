@@ -163,6 +163,37 @@
         </div>
     </div>
 
+    {{-- ── Re-do Setup ──────────────────────────────────────────── --}}
+    <div class="card animate-in" style="animation-delay:.14s">
+        <div class="card-title">Ulangi Langkah Setup</div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">
+            Perlu ubah akun, budget awal, atau notifikasi? Kamu bisa masuk ulang ke langkah onboarding tertentu.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            @php
+                $tid = $user->telegram_chat_id;
+                $steps = [
+                    ['route' => 'onboarding.profile',       'label' => '👤 Profil'],
+                    ['route' => 'onboarding.accounts',      'label' => '💳 Akun'],
+                    ['route' => 'onboarding.budget',        'label' => '📊 Budget'],
+                    ['route' => 'onboarding.health',        'label' => '🏃 Kesehatan'],
+                    ['route' => 'onboarding.notifications', 'label' => '🔔 Notifikasi'],
+                ];
+            @endphp
+            @foreach($steps as $step)
+            <a href="{{ route($step['route'], ['telegram_id' => $tid]) }}"
+               style="padding:8px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                      background:var(--bg-card);font-size:12px;color:var(--text-secondary);
+                      text-decoration:none;box-shadow:var(--card-shadow);font-weight:500;
+                      transition:border-color .2s,color .2s"
+               onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+               onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">
+                {{ $step['label'] }}
+            </a>
+            @endforeach
+        </div>
+    </div>
+
     {{-- ── Telegram info (read-only) ───────────────────────────── --}}
     <div class="card animate-in" style="animation-delay:.15s;background:var(--bg)">
         <div class="card-title">Akun Telegram</div>

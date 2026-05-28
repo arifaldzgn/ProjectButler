@@ -111,6 +111,25 @@ Message received
 
 ---
 
+## Configurable Runtime Parameters (v2.4)
+
+| Config key | Env var | Default | Effect |
+|---|---|---|---|
+| `butler.suggestion_threshold` | `BUTLER_SUGGESTION_THRESHOLD` | `0.55` | Stage-1 fuzzy match threshold in `CommandSuggestionService` |
+| `butler.undo_window_minutes` | `BUTLER_UNDO_WINDOW_MINUTES` | `5` | Minutes the undo button stays active after confirmation |
+
+---
+
+## Per-User Scheduled Behavior (v2.4)
+
+Both the **daily summary** and **bill reminders** now run inside `everyMinute()` scheduler loops. Each service performs internal time-matching:
+- `DailySummaryService::isUserSummaryTime()` compares `Carbon::now($user->timezone)->format('H:i')` to `$user->summary_time`.
+- `ReminderService::processBillDueReminders()` compares the same to each bill's `reminder_time` (fallback `09:00`).
+
+No external cron logic is needed — the minute-level scheduler is already used for `processTimeBasedReminders()`.
+
+---
+
 ## Behavioral Memory (Soul Table)
 
 **Table:** `behavioral_memory`
@@ -203,6 +222,22 @@ The AI receives a structured context object. As of v2.2.1, `totals` includes:
 
 ---
 
+## Domain-Specific Streaks (v2.4)
+
+`streaks` table now tracks 5 domains:
+
+| Domain | Trigger | "Hit" condition |
+|---|---|---|
+| `log` | any confirmed entry | at least 1 entry today |
+| `expense` | confirmed expense | at least 1 expense today |
+| `meal` | confirmed meal | at least 1 meal today |
+| `budget` | any confirmed entry | today's spending ≤ daily_budget_idr |
+| `calorie` | any confirmed entry | calories hit the goal (logic varies by goal type) |
+
+All use the same `Streak::updateStreak($type, $timezone)` method with 1-day grace period.
+
+---
+
 ## Dashboard Pages
 
 | Route | Controller | Description |
@@ -212,7 +247,8 @@ The AI receives a structured context object. As of v2.2.1, `totals` includes:
 | `/dashboard/spending` | `DashboardController@spending` | Monthly budget vs spend, category breakdown, daily chart, week-over-week banner |
 | `/dashboard/nutrition` | `DashboardController@nutrition` | Calorie goal donut, 30-day chart, today's meal list |
 | `/dashboard/insights` | `DashboardController@insights` | Spending trend %, calorie avg, combo chart, AI rule-based insights, mood chart |
-| `/dashboard/settings` | `DashboardController@settings` (GET/POST) | Edit profile, budgets, calorie goal, notifications |
+| `/dashboard/memory` | `DashboardController@memory` (GET) + `deleteMemory` (DELETE) | View + delete learned behavioral patterns |
+| `/dashboard/settings` | `DashboardController@settings` (GET/POST) | Edit profile, budgets, calorie goal, notifications, re-enter onboarding steps |
 | `/admin/users` | `AdminController@index` | User list with counts |
 | `/admin/ai-logs` | `AdminController@aiLogs` | AI parse/summary logs with filters, latency, confidence, failures |
 | `/admin/unrecognized` | `AdminController@unrecognized` | Grouped phrases that triggered the smart-fallback engine, with frequency / reason / suggestion stats (v2.3) |
@@ -236,6 +272,7 @@ The AI receives a structured context object. As of v2.2.1, `totals` includes:
 | `reminders` | Time-based and behavior-based reminder rules |
 | `streaks` | Consecutive logging streaks per user |
 | `mood_logs` | Daily mood + energy (keyed by telegram_chat_id + log_date) |
+| `quick_commands` | Keyword aliases → handler mapping (admin-editable, no deploy needed) |
 
 ---
 

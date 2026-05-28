@@ -616,7 +616,7 @@ class MessageRouter
         $undoToken = Str::random(16);
         $entry->update([
             'undo_token'       => $undoToken,
-            'undo_expires_at'  => now()->addMinutes(5),
+            'undo_expires_at'  => now()->addMinutes(config('butler.undo_window_minutes', 5)),
         ]);
 
         // Edit the original message to confirmed + [↩ Undo] button

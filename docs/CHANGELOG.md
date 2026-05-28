@@ -4,6 +4,78 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.4.0] 2026-05-27 — Full improvement pass (all 12 items)
+
+### Added
+
+**Behavioral Memory dashboard page (`/dashboard/memory`)**
+- Shows all learned patterns grouped by domain with confidence bars, observation count, auto-apply status, and last-seen timestamp.
+- Per-row delete button: removes the pattern without touching transaction history.
+- Explanatory card at the bottom describing how confidence thresholds work.
+- Linked in the main nav (Memory tab).
+
+**Domain-specific streaks: Budget + Calorie**
+- New columns on `streaks` table: `budget_current/longest/last_date`, `calorie_current/longest/last_date` (migration `2026_05_27_100001`).
+- `StreakService` now checks budget adherence (stayed under daily budget) and calorie goal completion after every confirmed entry.
+- Calorie hit definition respects `calorie_goal_type`: bulking = must meet or exceed, cutting = must stay under, maintenance = within ±150 kcal.
+- Dashboard home shows budget streak + calorie streak cards alongside existing log/meal streaks.
+
+**History page — enhanced filters + CSV export**
+- New filter fields: min/max amount, account/fund dropdown.
+- CSV export: `?export=csv` streams all filtered entries as a UTF-8 CSV with date, type, description, category, amount, calories, account columns.
+- Export button in page header respects current filters.
+
+**Calorie corrections feed behavioral memory**
+- When a user corrects calories via the inline edit on the Nutrition page, `BehavioralMemoryService::observe()` is called for `food_calories` domain, strengthening the user-specific calorie value.
+- Future AI estimates for the same food will be overridden by this learned value.
+
+**Smart fallback threshold configurable**
+- `CommandSuggestionService` now reads threshold from `config('butler.suggestion_threshold')` (env: `BUTLER_SUGGESTION_THRESHOLD`, default `0.55`).
+- Deployments can tune the threshold without touching code.
+
+**Undo window configurable**
+- Undo window duration read from `config('butler.undo_window_minutes')` (env: `BUTLER_UNDO_WINDOW_MINUTES`, default `5`).
+
+**Per-user daily summary time**
+- `DailySummaryService::sendAndStore()` now filters per user's `summary_time` setting and processes them per-minute instead of at a fixed 21:00.
+- Scheduler changed from `dailyAt('21:00')` to `everyMinute()`.
+- Users who set 08:30 as their summary time now get it at 08:30, not 21:00.
+
+**Per-bill reminder time**
+- New `reminder_time` column on `bills` table (migration `2026_05_27_100002`, nullable, default system 09:00).
+- `ReminderService::processBillDueReminders()` respects each bill's `reminder_time`, matching the current minute.
+- Scheduler for bill reminders changed from `dailyAt('09:00')` to `everyMinute()`.
+
+**Quick commands DB table**
+- New `quick_commands` table (migration `2026_05_27_100003`) with alias, handler, description, sort_order, is_active.
+- `QuickCommandSeeder` seeds all current aliases; run with `php artisan db:seed --class=QuickCommandSeeder`.
+- Admins can deactivate or add aliases without a code deploy (MessageRouter still owns execution logic; DB controls the trigger set).
+- `QuickCommand` Eloquent model added.
+
+**Admin AI Logs — intent failure rate breakdown**
+- New per-intent breakdown table (last 7 days, parse calls only): total, failures, failure %, avg confidence, avg latency.
+- High-failure intents show red, so prompt tuning priority is visible at a glance.
+
+**Admin Unrecognized — CSV export**
+- Export button in filter bar: downloads all filtered grouped phrases as CSV with phrase, occurrences, unique users, last seen, suggestion kind, suggestion label.
+
+**Settings — onboarding re-entry section**
+- New card in Settings page: "Ulangi Langkah Setup" with buttons for each onboarding step (Profil, Akun, Budget, Kesehatan, Notifikasi).
+- Links use the existing signed URL system (no new auth needed).
+
+### Changed
+
+- `config/butler.php`: added `suggestion_threshold` and `undo_window_minutes` keys.
+- Scheduler (`routes/console.php`): daily summary and bill reminders now run `everyMinute()` with internal time-matching logic.
+- `Bill` model: added `reminder_time` to `$fillable`.
+- `Streak` model: added 6 new domain columns to `$fillable` and `casts()`.
+
+### Why
+
+Every item addresses a real friction point identified in the improvement analysis: streaks that don't track goal-specific behavior, calorie data that never feeds back into AI estimates, users unable to see or correct what the bot has learned, no way to export data for tax prep, and a fixed bot behavior that required code deploys to adjust.
+
+---
+
 ## [v2.3.1] 2026-05-27 — Admin nav bar across all admin pages
 
 ### Added

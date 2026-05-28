@@ -76,6 +76,12 @@
         <a href="{{ route('admin.unrecognized.index') }}"
            style="font-size:13px;color:var(--text-muted);text-decoration:none;padding:11px 6px">Reset</a>
         @endif
+        <a href="{{ request()->fullUrlWithQuery(['export' => 'csv']) }}"
+           style="margin-left:auto;padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                  background:var(--bg-card);font-size:12px;color:var(--text-secondary);
+                  text-decoration:none;font-weight:500;white-space:nowrap">
+            ⬇ Export CSV
+        </a>
     </form>
 </div>
 

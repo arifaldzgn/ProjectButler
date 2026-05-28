@@ -563,6 +563,8 @@
                class="nav-link {{ request()->routeIs('dashboard.insights') ? 'active' : '' }}">Insights</a>
             <a href="{{ route('dashboard.history') }}"
                class="nav-link {{ request()->routeIs('dashboard.history') ? 'active' : '' }}">Riwayat</a>
+            <a href="{{ route('dashboard.memory') }}"
+               class="nav-link {{ request()->routeIs('dashboard.memory') ? 'active' : '' }}">Memory</a>
             <a href="{{ route('dashboard.settings') }}"
                class="nav-link {{ request()->routeIs('dashboard.settings') ? 'active' : '' }}">Settings</a>
             @if(request()->dashboard_user?->isAdmin() && !session()->has('admin_impersonator_id'))

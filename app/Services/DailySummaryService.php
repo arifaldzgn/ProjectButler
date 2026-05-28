@@ -37,10 +37,19 @@ class DailySummaryService
 
     public function sendAndStore(): void
     {
-        $users = User::where('onboarding_step', 'complete')->get();
+        $users = User::where('onboarding_step', 'complete')
+            ->where('daily_summary_enabled', true)
+            ->get();
 
         foreach ($users as $user) {
             try {
+                // Respect the user's preferred summary_time (stored as 'HH:MM').
+                // The scheduler calls this every minute; only process users whose
+                // current local time matches their preferred send time (±1 minute window).
+                if (!$this->isUserSummaryTime($user)) {
+                    continue;
+                }
+
                 $this->processForUser($user);
             } catch (\Exception $e) {
                 Log::error('Daily summary failed for user', [
@@ -49,6 +58,20 @@ class DailySummaryService
                 ]);
             }
         }
+    }
+
+    /**
+     * Returns true if the user's current local time matches their summary_time
+     * within a ±1-minute window, so the every-minute scheduler catches it.
+     */
+    private function isUserSummaryTime(User $user): bool
+    {
+        $summaryTime = $user->summary_time ?? '21:00';          // default 21:00
+        $tz          = $user->timezone ?? config('butler.timezone', 'Asia/Jakarta');
+        $now         = Carbon::now($tz)->format('H:i');
+
+        // Match the exact minute (scheduler runs every minute now)
+        return $now === $summaryTime;
     }
 
     private function processForUser(User $user): void

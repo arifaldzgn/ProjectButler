@@ -26,6 +26,7 @@ class Bill extends Model
         'last_paid_at',
         'last_paid_amount',
         'this_month_paid',
+        'reminder_time',
     ];
 
     protected function casts(): array

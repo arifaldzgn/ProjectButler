@@ -21,12 +21,14 @@ class CommandSuggestionService
 {
     private OpenRouterClient $ai;
 
-    // Stage-1 threshold. 0.55 ≈ "close enough to confidently suggest".
-    private const SIMILARITY_THRESHOLD = 0.55;
+    // Stage-1 threshold — read from config so admin can tune without a deploy.
+    // Set BUTLER_SUGGESTION_THRESHOLD in .env (default 0.55).
+    private float $similarityThreshold;
 
     public function __construct(OpenRouterClient $ai)
     {
         $this->ai = $ai;
+        $this->similarityThreshold = (float) config('butler.suggestion_threshold', 0.55);
     }
 
     /**
@@ -161,7 +163,7 @@ class CommandSuggestionService
             }
         }
 
-        return ($best && $bestScore >= self::SIMILARITY_THRESHOLD) ? $best : null;
+        return ($best && $bestScore >= $this->similarityThreshold) ? $best : null;
     }
 
     /**

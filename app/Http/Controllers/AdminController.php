@@ -43,7 +43,21 @@ class AdminController extends Controller
             'avg_confidence'   => round((float) AiLog::whereDate('created_at', today())->whereNotNull('confidence_score')->avg('confidence_score'), 2),
         ];
 
-        return view('admin.ai-logs.index', compact('logs', 'callTypes', 'users', 'stats'));
+        // Per-intent failure rate (last 7 days, parse calls only)
+        $intentBreakdown = DB::table('ai_logs')
+            ->where('call_type', 'parse')
+            ->where('created_at', '>=', now()->subDays(7))
+            ->whereNotNull('intent_detected')
+            ->where('intent_detected', '!=', 'unrecognized')
+            ->selectRaw('intent_detected as intent, COUNT(*) as total,
+                         SUM(CASE WHEN was_successful = 0 THEN 1 ELSE 0 END) as failures,
+                         ROUND(AVG(confidence_score), 2) as avg_conf,
+                         ROUND(AVG(latency_ms)) as avg_latency')
+            ->groupBy('intent_detected')
+            ->orderByDesc('total')
+            ->get();
+
+        return view('admin.ai-logs.index', compact('logs', 'callTypes', 'users', 'stats', 'intentBreakdown'));
     }
 
     /**
@@ -106,6 +120,44 @@ class AdminController extends Controller
             ->first();
         $stats['top_phrase']       = $top->phrase ?? null;
         $stats['top_phrase_count'] = $top->c      ?? 0;
+
+        // ── CSV export ──────────────────────────────────────────────────
+        if ($request->get('export') === 'csv') {
+            $allRows = DB::table('ai_logs')
+                ->where('intent_detected', 'unrecognized')
+                ->whereBetween('created_at', [$from, $to])
+                ->selectRaw("
+                    {$normalizedExpr} as phrase,
+                    COUNT(*) as occurrences,
+                    COUNT(DISTINCT user_id) as unique_users,
+                    MAX(created_at) as last_seen,
+                    MAX(error_message) as sample_suggestion
+                ")
+                ->groupBy(DB::raw($normalizedExpr))
+                ->havingRaw('COUNT(*) >= ?', [$minCnt])
+                ->orderByDesc('occurrences')
+                ->get();
+
+            return response()->streamDownload(function () use ($allRows) {
+                $out = fopen('php://output', 'w');
+                fputcsv($out, ['Phrase', 'Occurrences', 'Unique Users', 'Last Seen', 'Suggestion Kind', 'Suggestion Label']);
+                foreach ($allRows as $row) {
+                    $payload = json_decode($row->sample_suggestion ?? '{}', true);
+                    $sugg    = $payload['suggestion'] ?? [];
+                    fputcsv($out, [
+                        $row->phrase,
+                        $row->occurrences,
+                        $row->unique_users,
+                        $row->last_seen,
+                        $sugg['kind'] ?? '',
+                        $sugg['label'] ?? '',
+                    ]);
+                }
+                fclose($out);
+            }, 'unrecognized-' . now()->format('Ymd') . '.csv', [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+            ]);
+        }
 
         return view('admin.unrecognized.index', compact('grouped', 'stats', 'from', 'to', 'minCnt'));
     }

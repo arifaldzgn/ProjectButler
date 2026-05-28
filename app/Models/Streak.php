@@ -24,14 +24,22 @@ class Streak extends Model
         'meal_current',
         'meal_longest',
         'meal_last_date',
+        'budget_current',
+        'budget_longest',
+        'budget_last_date',
+        'calorie_current',
+        'calorie_longest',
+        'calorie_last_date',
     ];
 
     protected function casts(): array
     {
         return [
-            'log_last_date' => 'date',
+            'log_last_date'     => 'date',
             'expense_last_date' => 'date',
-            'meal_last_date' => 'date',
+            'meal_last_date'    => 'date',
+            'budget_last_date'  => 'date',
+            'calorie_last_date' => 'date',
         ];
     }
 

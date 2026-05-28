@@ -41,6 +41,8 @@ Route::middleware('dashboard.session')->group(function () {
     Route::get('/dashboard/spending',     [DashboardController::class, 'spending'])->name('dashboard.spending');
     Route::get('/dashboard/nutrition',    [DashboardController::class, 'nutrition'])->name('dashboard.nutrition');
     Route::get('/dashboard/insights',     [DashboardController::class, 'insights'])->name('dashboard.insights');
+    Route::get('/dashboard/memory',       [DashboardController::class, 'memory'])->name('dashboard.memory');
+    Route::delete('/dashboard/memory/{memory}', [DashboardController::class, 'deleteMemory'])->name('dashboard.memory.delete');
     Route::get('/dashboard/settings',     [DashboardController::class, 'settings'])->name('dashboard.settings');
     Route::post('/dashboard/settings',    [DashboardController::class, 'saveSettings'])->name('dashboard.settings.save');
     Route::patch('/dashboard/entries/{entry}', [DashboardController::class, 'updateEntry'])->name('dashboard.entry.update');

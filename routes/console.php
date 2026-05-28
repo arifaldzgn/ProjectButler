@@ -12,12 +12,13 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// ── Daily Summary — 21:00 user timezone ─────────────────────────────
+// ── Daily Summary — per-user preferred time, checked every minute ────
+// DailySummaryService::sendAndStore() now filters by each user's summary_time
+// so each user gets their summary at their chosen hour (default 21:00 WIB).
 Schedule::call(function () {
     app(DailySummaryService::class)->sendAndStore();
-})->dailyAt('21:00')
-  ->timezone(config('butler.timezone'))
-  ->description('Send daily summary to all users');
+})->everyMinute()
+  ->description('Send daily summary — per-user preferred time');
 
 // ── Behavior-based Reminders — every 15 min ──────────────────────────
 Schedule::call(function () {
@@ -39,12 +40,12 @@ Schedule::call(function () {
   ->timezone(config('butler.timezone'))
   ->description('Setup-incomplete reminders (income, bills, emergency fund, debt)');
 
-// ── Bill Due Reminders — daily 09:00 ────────────────────────────────
+// ── Bill Due Reminders — every minute, per-bill reminder_time ───────
+// ReminderService::processBillDueReminders() respects each bill's reminder_time.
 Schedule::call(function () {
     app(ReminderService::class)->processBillDueReminders();
-})->dailyAt('09:00')
-  ->timezone(config('butler.timezone'))
-  ->description('Bill due reminders (3 days before due_day)');
+})->everyMinute()
+  ->description('Bill due reminders — per-bill reminder_time (default 09:00)');
 
 // ── Debt Due Reminders — daily 09:00 ────────────────────────────────
 Schedule::call(function () {

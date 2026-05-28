@@ -220,22 +220,31 @@
 </div>
 @endif
 
-{{-- ── Streak (if calorie mode shows it above, show separate card) --}}
-@if($user->isCalorieMode() && ($streak?->log_current ?? 0) > 0)
-<div class="grid-2 animate-in" style="animation-delay:.11s">
-    <div class="card stat-card accent" style="margin-bottom:0">
-        <span class="stat-icon">🔥</span>
-        <div class="card-title">Logging Streak</div>
-        <div class="card-value">{{ $streak->log_current }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
-        <div class="card-subtitle">Terpanjang: {{ $streak->log_longest }} hari</div>
+{{-- ── Streaks — domain-specific ───────────────────────────────── --}}
+@if($streak)
+@php
+    $streakCards = [];
+    if ($user->isCalorieMode() && ($streak->log_current ?? 0) > 0)
+        $streakCards[] = ['icon' => '🔥', 'label' => 'Logging Streak', 'current' => $streak->log_current, 'longest' => $streak->log_longest, 'color' => 'accent'];
+    if ($user->isCalorieMode() && ($streak->meal_current ?? 0) > 0)
+        $streakCards[] = ['icon' => '🍽️', 'label' => 'Meal Streak', 'current' => $streak->meal_current ?? 0, 'longest' => $streak->meal_longest ?? 0, 'color' => 'blue'];
+    if ($user->isFinanceMode() && ($streak->budget_current ?? 0) > 0)
+        $streakCards[] = ['icon' => '💰', 'label' => 'Budget Streak', 'current' => $streak->budget_current ?? 0, 'longest' => $streak->budget_longest ?? 0, 'color' => 'green'];
+    if ($user->isCalorieMode() && $user->daily_calorie_goal && ($streak->calorie_current ?? 0) > 0)
+        $streakCards[] = ['icon' => '🎯', 'label' => 'Kalori Streak', 'current' => $streak->calorie_current ?? 0, 'longest' => $streak->calorie_longest ?? 0, 'color' => 'orange'];
+@endphp
+@if(count($streakCards) > 0)
+<div class="{{ count($streakCards) === 1 ? 'grid-2' : (count($streakCards) <= 2 ? 'grid-2' : 'grid-4') }} animate-in" style="animation-delay:.11s">
+    @foreach($streakCards as $sc)
+    <div class="card stat-card {{ $sc['color'] }}" style="margin-bottom:0">
+        <span class="stat-icon">{{ $sc['icon'] }}</span>
+        <div class="card-title">{{ $sc['label'] }}</div>
+        <div class="card-value">{{ $sc['current'] }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
+        <div class="card-subtitle">Terpanjang: {{ $sc['longest'] }} hari</div>
     </div>
-    <div class="card stat-card blue" style="margin-bottom:0">
-        <span class="stat-icon">🍽️</span>
-        <div class="card-title">Meal Streak</div>
-        <div class="card-value">{{ $streak->meal_current ?? 0 }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
-        <div class="card-subtitle">Terpanjang: {{ $streak->meal_longest ?? 0 }} hari</div>
-    </div>
+    @endforeach
 </div>
+@endif
 @endif
 
 {{-- ── Accounts ─────────────────────────────────────────────────── --}}

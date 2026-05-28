@@ -39,6 +39,50 @@
     </div>
 </div>
 
+<!-- Intent Breakdown (last 7 days) -->
+@if($intentBreakdown->isNotEmpty())
+<div class="card animate-in" style="padding:0;overflow:hidden;margin-bottom:16px">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <div class="card-title" style="margin:0">Intent Breakdown (7 hari terakhir, parse calls)</div>
+        <span style="font-size:11px;color:var(--text-dim)">Failure = parse throw / confidence &lt; 0.50 / unknown</span>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Intent</th>
+                <th style="text-align:right">Total</th>
+                <th style="text-align:right">Failures</th>
+                <th style="text-align:right">Failure %</th>
+                <th style="text-align:right">Avg Conf.</th>
+                <th style="text-align:right">Avg Latency</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach($intentBreakdown as $row)
+            @php
+                $failPct  = $row->total > 0 ? round($row->failures / $row->total * 100) : 0;
+                $failColor = $failPct >= 30 ? 'var(--red)' : ($failPct >= 10 ? 'var(--orange)' : 'var(--green)');
+            @endphp
+            <tr>
+                <td style="font-family:monospace;font-size:12px;color:var(--text-primary)">{{ $row->intent }}</td>
+                <td style="text-align:right;font-weight:600">{{ $row->total }}</td>
+                <td style="text-align:right;color:var(--red)">{{ $row->failures }}</td>
+                <td style="text-align:right">
+                    <span style="color:{{ $failColor }};font-weight:600">{{ $failPct }}%</span>
+                </td>
+                <td style="text-align:right;color:{{ ($row->avg_conf ?? 1) >= 0.8 ? 'var(--green)' : (($row->avg_conf ?? 1) >= 0.5 ? 'var(--orange)' : 'var(--red)') }}">
+                    {{ $row->avg_conf !== null ? number_format($row->avg_conf, 2) : '—' }}
+                </td>
+                <td style="text-align:right;color:var(--text-muted);font-size:12px">{{ $row->avg_latency ? $row->avg_latency . 'ms' : '—' }}</td>
+            </tr>
+            @endforeach
+        </tbody>
+    </table>
+    </div>
+</div>
+@endif
+
 <!-- Filters -->
 <div class="card animate-in" style="margin-bottom: 16px;">
     <form method="GET" style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">

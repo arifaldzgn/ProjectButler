@@ -45,4 +45,26 @@ return [
     */
     'allowed_chat_ids' => env('ALLOWED_CHAT_IDS', ''),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Smart Fallback — Suggestion Engine
+    |--------------------------------------------------------------------------
+    |
+    | Stage-1 similarity threshold (0.0–1.0). Higher = stricter matches.
+    | Default 0.55 works well empirically. Tune via BUTLER_SUGGESTION_THRESHOLD.
+    |
+    */
+    'suggestion_threshold' => (float) env('BUTLER_SUGGESTION_THRESHOLD', 0.55),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Undo Window
+    |--------------------------------------------------------------------------
+    |
+    | How many minutes after confirmation the undo button stays active.
+    | Default 5 minutes. Configure via BUTLER_UNDO_WINDOW_MINUTES.
+    |
+    */
+    'undo_window_minutes' => (int) env('BUTLER_UNDO_WINDOW_MINUTES', 5),
+
 ];

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BehavioralMemory;
 use App\Models\Entry;
 use App\Models\User;
+use App\Services\BehavioralMemoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -136,7 +138,7 @@ class DashboardController extends Controller
         ));
     }
 
-    public function history(Request $request): View
+    public function history(Request $request): View|\Symfony\Component\HttpFoundation\StreamedResponse
     {
         $user = $request->dashboard_user;
 
@@ -145,19 +147,58 @@ class DashboardController extends Controller
                       ->whereNotNull('confirmed_at')
                       ->where('is_undone', false);
 
-        if ($request->has('type') && $request->type) {
+        if ($request->filled('type')) {
             $query->where('type', $request->type);
         }
-        if ($request->has('from') && $request->from) {
+        if ($request->filled('from')) {
             $query->whereDate('entry_time', '>=', $request->from);
         }
-        if ($request->has('to') && $request->to) {
+        if ($request->filled('to')) {
             $query->whereDate('entry_time', '<=', $request->to);
+        }
+        if ($request->filled('min_amount')) {
+            $query->where('amount', '>=', (int) $request->min_amount);
+        }
+        if ($request->filled('max_amount')) {
+            $query->where('amount', '<=', (int) $request->max_amount);
+        }
+        if ($request->filled('fund_id')) {
+            $query->where('source_fund_id', $request->fund_id);
+        }
+
+        // ── CSV export ──────────────────────────────────────────────────
+        if ($request->get('export') === 'csv') {
+            $allEntries = (clone $query)->orderByDesc('entry_time')->get();
+
+            $headers = [
+                'Content-Type'        => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="butler-history-' . now()->format('Ymd') . '.csv"',
+            ];
+
+            return response()->streamDownload(function () use ($allEntries) {
+                $out = fopen('php://output', 'w');
+                fputcsv($out, ['Tanggal', 'Tipe', 'Keterangan', 'Kategori', 'Jumlah (Rp)', 'Kalori', 'Akun']);
+                foreach ($allEntries as $e) {
+                    fputcsv($out, [
+                        $e->entry_time->format('d/m/Y H:i'),
+                        $e->type,
+                        $e->food_item ?? $e->merchant ?? $e->note ?? '',
+                        $e->category ?? '',
+                        $e->amount ?? '',
+                        $e->calories ?? '',
+                        $e->fundTransactions->first()?->fund?->name ?? '',
+                    ]);
+                }
+                fclose($out);
+            }, 'butler-history-' . now()->format('Ymd') . '.csv', $headers);
         }
 
         $entries = $query->orderByDesc('entry_time')->paginate(20)->withQueryString();
 
-        return view('dashboard.history', compact('user', 'entries'));
+        // Funds for filter dropdown
+        $funds = $user->funds()->where('is_active', true)->orderBy('name')->get(['id', 'name']);
+
+        return view('dashboard.history', compact('user', 'entries', 'funds'));
     }
 
     public function spending(Request $request): View
@@ -401,12 +442,52 @@ class DashboardController extends Controller
         ]);
 
         // When calories are user-corrected, mark as no longer estimated
+        // AND feed the correction back into behavioral memory (food_calories domain)
         if (isset($validated['calories'])) {
             $validated['is_calorie_estimated'] = false;
+
+            $foodItem = $validated['food_item'] ?? $entry->food_item;
+            if ($foodItem && $validated['calories'] > 0) {
+                $memory = app(BehavioralMemoryService::class);
+                $memory->observe($user->id, BehavioralMemory::DOMAIN_FOOD_CALORIES, $foodItem, [
+                    'calories'   => (int) $validated['calories'],
+                    'source'     => 'user_correction',
+                    'corrected_at' => now()->toISOString(),
+                ]);
+            }
         }
 
         $entry->update(array_filter($validated, fn ($v) => $v !== null));
 
+        return response()->json(['ok' => true]);
+    }
+
+    public function memory(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $memories = BehavioralMemory::forUser($user->id)
+            ->orderByDesc('behavioral_confidence')
+            ->orderByDesc('observation_count')
+            ->get()
+            ->groupBy('domain');
+
+        $domainLabels = [
+            BehavioralMemory::DOMAIN_MERCHANT_ACCOUNT  => '🏪 Merchant → Akun',
+            BehavioralMemory::DOMAIN_FOOD_CALORIES     => '🍽️ Kalori Makanan',
+            BehavioralMemory::DOMAIN_FOOD_PORTION      => '🥗 Porsi Makanan',
+            BehavioralMemory::DOMAIN_MEAL_TIMING       => '⏰ Waktu Makan',
+            BehavioralMemory::DOMAIN_CATEGORY_ACCOUNT  => '📂 Kategori → Akun',
+            BehavioralMemory::DOMAIN_SPEND_RHYTHM      => '📈 Pola Pengeluaran',
+        ];
+
+        return view('dashboard.memory', compact('user', 'memories', 'domainLabels'));
+    }
+
+    public function deleteMemory(Request $request, BehavioralMemory $memory): \Illuminate\Http\JsonResponse
+    {
+        abort_if($memory->user_id !== $request->dashboard_user->id, 403);
+        $memory->delete();
         return response()->json(['ok' => true]);
     }
 
