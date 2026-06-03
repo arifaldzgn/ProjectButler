@@ -5,14 +5,14 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Butler Memory 🧠</h2>
+        <h2>Butler Memory <i class="fas fa-brain" style="font-size:18px;color:var(--accent)"></i></h2>
         <p>Pola yang sudah Butler pelajari dari kebiasaan kamu. Hapus jika tidak sesuai.</p>
     </div>
 </div>
 
 @if($memories->isEmpty())
 <div class="empty-state animate-in">
-    <div class="empty-icon">🧠</div>
+    <div class="empty-icon"><i class="fas fa-brain"></i></div>
     <h3>Belum ada yang dipelajari</h3>
     <p>Semakin sering kamu pakai Butler, semakin banyak pola yang akan muncul di sini.</p>
 </div>
@@ -77,9 +77,9 @@
                 </td>
                 <td style="text-align:center">
                     @if($mem->auto_apply)
-                        <span style="color:var(--green);font-size:13px">✓ Auto</span>
+                        <span style="color:var(--green);font-size:13px"><i class="fas fa-check" style="font-size:10px"></i> Auto</span>
                     @elseif($mem->behavioral_confidence >= 0.8)
-                        <span style="color:var(--orange);font-size:11px">⏳ Pending consent</span>
+                        <span style="color:var(--orange);font-size:11px"><i class="fas fa-clock" style="font-size:10px"></i> Pending consent</span>
                     @else
                         <span style="color:var(--text-dim);font-size:11px">Sugesti saja</span>
                     @endif
@@ -109,7 +109,7 @@
 
 <div class="card animate-in" style="background:rgba(139,92,246,0.04);border-color:rgba(139,92,246,0.15);margin-top:4px">
     <div style="display:flex;gap:12px;align-items:flex-start">
-        <span style="font-size:20px">💡</span>
+        <i class="fas fa-lightbulb" style="font-size:18px;color:var(--yellow);flex-shrink:0;margin-top:2px"></i>
         <div style="font-size:13px;color:var(--text-secondary);line-height:1.6">
             <strong style="color:var(--text-primary)">Bagaimana Memory bekerja?</strong><br>
             Butler mempelajari kebiasaanmu dari setiap transaksi yang dikonfirmasi.

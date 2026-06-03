@@ -7,16 +7,16 @@
 @php
     $hour = now($user->timezone ?? 'Asia/Jakarta')->hour;
     $greet = $hour < 11 ? 'Selamat pagi' : ($hour < 15 ? 'Selamat siang' : ($hour < 19 ? 'Selamat sore' : 'Selamat malam'));
-    $waveEmoji = $hour < 11 ? '☀️' : ($hour < 19 ? '👋' : '🌙');
+    $waveIcon = $hour < 11 ? 'fa-sun' : ($hour < 19 ? 'fa-hand-wave' : 'fa-moon');
 @endphp
 <div class="page-header animate-in" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
     <div>
-        <h2>{{ $greet }}, {{ $user->name }} {{ $waveEmoji }}</h2>
+        <h2>{{ $greet }}, {{ $user->name }} <i class="fas {{ $waveIcon }}" style="font-size:20px"></i></h2>
         <p>Ringkasan keuangan dan aktivitas Butler-mu hari ini.</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
         <div style="padding:8px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-weight:600;color:var(--text-secondary);box-shadow:var(--card-shadow)">
-            📅 {{ today()->translatedFormat('d M Y') }}
+            <i class="fas fa-calendar-days" style="margin-right:5px"></i>{{ today()->translatedFormat('d M Y') }}
         </div>
     </div>
 </div>
@@ -41,8 +41,8 @@
                     background:var(--grad-purple);
                     display:inline-flex;align-items:center;justify-content:center;
                     box-shadow:0 6px 14px -4px rgba(124,58,237,.45);
-                    color:#fff;font-size:16px;
-                ">💼</div>
+                    color:#fff;font-size:15px;
+                "><i class="fas fa-briefcase"></i></div>
                 <div style="font-size:13px;font-weight:600;color:var(--text-secondary);letter-spacing:-.01em">
                     Total Kekayaan
                 </div>
@@ -51,7 +51,7 @@
                 Rp {{ number_format($totalBalance, 0, ',', '.') }}
             </div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:8px;display:flex;align-items:center;gap:6px">
-                <span class="pill pill-success" style="padding:2px 8px;font-size:11px">✓ aktif</span>
+                <span class="pill pill-success" style="padding:2px 8px;font-size:11px"><i class="fas fa-check" style="font-size:9px"></i> aktif</span>
                 <span>{{ $accounts->count() }} akun belanja tersinkron</span>
             </div>
         </div>
@@ -62,7 +62,7 @@
             <div>
                 <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">
                     {{ $acc->name }}
-                    @if($acc->is_default_spending) <span style="color:var(--accent)">★</span> @endif
+                    @if($acc->is_default_spending) <i class="fas fa-star" style="color:var(--accent);font-size:10px"></i> @endif
                 </div>
                 <div style="font-size:18px;font-weight:700;color:var(--text-primary)">
                     Rp {{ number_format($acc->current_balance, 0, ',', '.') }}
@@ -89,7 +89,7 @@
 
     {{-- Spending today --}}
     <div class="card stat-card red">
-        <span class="stat-icon">💸</span>
+        <span class="stat-icon"><i class="fas fa-arrow-trend-down"></i></span>
         <div class="card-title">Pengeluaran Hari Ini</div>
         <div class="card-value">
             Rp {{ number_format($todaySpend, 0, ',', '.') }}
@@ -101,14 +101,14 @@
                      style="width:{{ $pct }}%"></div>
             </div>
             <div class="card-subtitle" style="margin-top:6px; color: {{ $rem >= 0 ? 'var(--text-muted)' : 'var(--red)' }}">
-                {{ $rem >= 0 ? 'Sisa Rp '.number_format($rem,0,',','.') : '⚠️ Over Rp '.number_format(abs($rem),0,',','.') }}
+                {{ $rem >= 0 ? 'Sisa Rp '.number_format($rem,0,',','.') : '<i class="fas fa-triangle-exclamation"></i> Over Rp '.number_format(abs($rem),0,',','.') }}
             </div>
         @endif
     </div>
 
     {{-- Monthly spend --}}
     <div class="card stat-card orange">
-        <span class="stat-icon">📅</span>
+        <span class="stat-icon"><i class="fas fa-calendar"></i></span>
         <div class="card-title">Spending Bulan Ini</div>
         <div class="card-value">
             Rp {{ number_format($monthlySpend, 0, ',', '.') }}
@@ -116,7 +116,7 @@
         @if($user->monthly_budget_idr)
             @php $mRem = $user->monthly_budget_idr - $monthlySpend; @endphp
             <div class="card-subtitle" style="color: {{ $mRem >= 0 ? 'var(--text-muted)' : 'var(--red)' }}">
-                {{ $mRem >= 0 ? 'Sisa Rp '.number_format($mRem,0,',','.') : '⚠️ Over Rp '.number_format(abs($mRem),0,',','.') }}
+                {{ $mRem >= 0 ? 'Sisa Rp '.number_format($mRem,0,',','.') : 'Over Rp '.number_format(abs($mRem),0,',','.') }}
             </div>
         @else
             <div class="card-subtitle">No monthly budget set</div>
@@ -125,7 +125,7 @@
 
     {{-- Monthly income --}}
     <div class="card stat-card green">
-        <span class="stat-icon">💰</span>
+        <span class="stat-icon"><i class="fas fa-coins"></i></span>
         <div class="card-title">Income Bulan Ini</div>
         <div class="card-value">
             Rp {{ number_format($monthlyIncome, 0, ',', '.') }}
@@ -140,7 +140,7 @@
     {{-- Calories / streak --}}
     @if($user->isCalorieMode())
     <div class="card stat-card yellow">
-        <span class="stat-icon">🔥</span>
+        <span class="stat-icon"><i class="fas fa-fire"></i></span>
         <div class="card-title">Kalori Hari Ini</div>
         <div class="card-value">{{ number_format($todayCalories) }}</div>
         @if($user->daily_calorie_goal)
@@ -150,13 +150,13 @@
                      style="width:{{ $cPct }}%"></div>
             </div>
             <div class="card-subtitle" style="margin-top:6px">
-                {{ $cRem >= 0 ? 'Sisa '.$cRem.' kcal' : '⚠️ Over '.abs($cRem).' kcal' }}
+                {{ $cRem >= 0 ? 'Sisa '.$cRem.' kcal' : 'Over '.abs($cRem).' kcal' }}
             </div>
         @endif
     </div>
     @else
     <div class="card stat-card accent">
-        <span class="stat-icon">🔥</span>
+        <span class="stat-icon"><i class="fas fa-fire"></i></span>
         <div class="card-title">Logging Streak</div>
         <div class="card-value">{{ $streak?->log_current ?? 0 }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
         <div class="card-subtitle">Terpanjang: {{ $streak?->log_longest ?? 0 }} hari</div>
@@ -179,7 +179,6 @@
             <div style="display:flex;align-items:baseline;gap:8px">
                 <span style="font-size:36px;font-weight:800;color:{{ $band['color'] }}">{{ $score }}</span>
                 <span style="font-size:16px;color:var(--text-muted)">/100</span>
-                <span style="font-size:20px">{{ $band['emoji'] }}</span>
                 <span style="font-size:13px;font-weight:600;color:{{ $band['color'] }}">{{ $band['label'] }}</span>
             </div>
         </div>
@@ -229,7 +228,7 @@
             </div>
         @else
             <div class="empty-state" style="padding:20px">
-                <div class="empty-icon">📊</div>
+                <div class="empty-icon"><i class="fas fa-chart-bar"></i></div>
                 <p>Belum ada data bulan ini</p>
             </div>
         @endif
@@ -240,7 +239,7 @@
 {{-- ── Bills due soon ──────────────────────────────────────────── --}}
 @if($billsDue->isNotEmpty())
 <div class="animate-in" style="animation-delay:.10s">
-    <div class="section-title">⚠️ Tagihan Jatuh Tempo Minggu Ini</div>
+    <div class="section-title"><i class="fas fa-triangle-exclamation" style="color:var(--orange)"></i> Tagihan Jatuh Tempo Minggu Ini</div>
     <div class="table-wrap">
         @foreach($billsDue as $bill)
         <div class="account-row">
@@ -263,19 +262,19 @@
 @php
     $streakCards = [];
     if ($user->isCalorieMode() && ($streak->log_current ?? 0) > 0)
-        $streakCards[] = ['icon' => '🔥', 'label' => 'Logging Streak', 'current' => $streak->log_current, 'longest' => $streak->log_longest, 'color' => 'accent'];
+        $streakCards[] = ['icon' => 'fa-fire', 'label' => 'Logging Streak', 'current' => $streak->log_current, 'longest' => $streak->log_longest, 'color' => 'accent'];
     if ($user->isCalorieMode() && ($streak->meal_current ?? 0) > 0)
-        $streakCards[] = ['icon' => '🍽️', 'label' => 'Meal Streak', 'current' => $streak->meal_current ?? 0, 'longest' => $streak->meal_longest ?? 0, 'color' => 'blue'];
+        $streakCards[] = ['icon' => 'fa-utensils', 'label' => 'Meal Streak', 'current' => $streak->meal_current ?? 0, 'longest' => $streak->meal_longest ?? 0, 'color' => 'blue'];
     if ($user->isFinanceMode() && ($streak->budget_current ?? 0) > 0)
-        $streakCards[] = ['icon' => '💰', 'label' => 'Budget Streak', 'current' => $streak->budget_current ?? 0, 'longest' => $streak->budget_longest ?? 0, 'color' => 'green'];
+        $streakCards[] = ['icon' => 'fa-coins', 'label' => 'Budget Streak', 'current' => $streak->budget_current ?? 0, 'longest' => $streak->budget_longest ?? 0, 'color' => 'green'];
     if ($user->isCalorieMode() && $user->daily_calorie_goal && ($streak->calorie_current ?? 0) > 0)
-        $streakCards[] = ['icon' => '🎯', 'label' => 'Kalori Streak', 'current' => $streak->calorie_current ?? 0, 'longest' => $streak->calorie_longest ?? 0, 'color' => 'orange'];
+        $streakCards[] = ['icon' => 'fa-bullseye', 'label' => 'Kalori Streak', 'current' => $streak->calorie_current ?? 0, 'longest' => $streak->calorie_longest ?? 0, 'color' => 'orange'];
 @endphp
 @if(count($streakCards) > 0)
 <div class="{{ count($streakCards) === 1 ? 'grid-2' : (count($streakCards) <= 2 ? 'grid-2' : 'grid-4') }} animate-in" style="animation-delay:.11s">
     @foreach($streakCards as $sc)
     <div class="card stat-card {{ $sc['color'] }}" style="margin-bottom:0">
-        <span class="stat-icon">{{ $sc['icon'] }}</span>
+        <span class="stat-icon"><i class="fas {{ $sc['icon'] }}"></i></span>
         <div class="card-title">{{ $sc['label'] }}</div>
         <div class="card-value">{{ $sc['current'] }} <span style="font-size:16px;font-weight:500;color:var(--text-muted)">hari</span></div>
         <div class="card-subtitle">Terpanjang: {{ $sc['longest'] }} hari</div>
@@ -328,14 +327,18 @@
     <div class="fund-card" x-data="{open:false}" @click="open=!open" style="cursor:pointer;user-select:none">
         <div class="fund-header">
             <div class="fund-name">
-                @if($fund->fund_type === 'emergency_fund') 🛡️
-                @elseif($fund->fund_type === 'sinking_fund') ✈️
-                @elseif($fund->fund_type === 'savings') 📈
-                @else 🎯
+                @if($fund->fund_type === 'emergency_fund') <i class="fas fa-shield-halved" style="color:var(--blue)"></i>
+                @elseif($fund->fund_type === 'sinking_fund') <i class="fas fa-piggy-bank" style="color:var(--purple)"></i>
+                @elseif($fund->fund_type === 'savings') <i class="fas fa-chart-line" style="color:var(--green)"></i>
+                @else <i class="fas fa-bullseye" style="color:var(--orange)"></i>
                 @endif
                 {{ $fund->name }}
                 @if($onTrack !== null)
-                    <span style="font-size:11px;margin-left:6px">{{ $onTrack ? '✅' : '⚠️' }}</span>
+                    @if($onTrack)
+                        <i class="fas fa-circle-check" style="font-size:11px;margin-left:6px;color:var(--green)"></i>
+                    @else
+                        <i class="fas fa-triangle-exclamation" style="font-size:11px;margin-left:6px;color:var(--orange)"></i>
+                    @endif
                 @endif
             </div>
             <div class="fund-balance">Rp {{ number_format($fund->current_balance,0,',','.') }}</div>

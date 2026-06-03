@@ -3,7 +3,7 @@
 
 @section('content')
 <div class="page-header">
-    <h2>Spending Analytics 💸</h2>
+    <h2>Spending Analytics</h2>
     <p>Track where your money goes</p>
 </div>
 
@@ -11,7 +11,7 @@
 @if($wowChangePct !== null)
 <div class="card animate-in" style="margin-bottom: 16px; border-left: 4px solid {{ $wowChangePct > 0 ? 'var(--red)' : 'var(--green)' }};">
     <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-size: 28px;">{{ $wowChangePct > 0 ? '📈' : '📉' }}</span>
+        <i class="fas {{ $wowChangePct > 0 ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down' }}" style="font-size:24px;color:{{ $wowChangePct > 0 ? 'var(--red)' : 'var(--green)' }}"></i>
         <div>
             <div style="font-size: 14px; font-weight: 600; color: {{ $wowChangePct > 0 ? 'var(--red)' : 'var(--green)' }};">
                 {{ $wowChangePct > 0 ? '+' : '' }}{{ $wowChangePct }}% vs minggu lalu
@@ -28,7 +28,7 @@
 <!-- Stat Cards -->
 <div class="grid-4">
     <div class="card stat-card red animate-in">
-        <div class="stat-icon">📅</div>
+        <div class="stat-icon"><i class="fas fa-calendar"></i></div>
         <div class="card-title">This Month</div>
         <div class="card-value">Rp {{ number_format($monthSpending, 0, ',', '.') }}</div>
         @php $pct = $monthBudget > 0 ? min(round(($monthSpending / $monthBudget) * 100), 100) : 0; @endphp
@@ -39,7 +39,7 @@
     </div>
 
     <div class="card stat-card green animate-in">
-        <div class="stat-icon">🎯</div>
+        <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
         <div class="card-title">Budget Remaining</div>
         @php $remaining = max($monthBudget - $monthSpending, 0); @endphp
         <div class="card-value">Rp {{ number_format($remaining, 0, ',', '.') }}</div>
@@ -47,14 +47,14 @@
     </div>
 
     <div class="card stat-card blue animate-in">
-        <div class="stat-icon">💎</div>
+        <div class="stat-icon"><i class="fas fa-piggy-bank"></i></div>
         <div class="card-title">Month Savings</div>
         <div class="card-value">Rp {{ number_format($monthSavings, 0, ',', '.') }}</div>
         <div class="card-subtitle">Total: Rp {{ number_format($totalSavings, 0, ',', '.') }}</div>
     </div>
 
     <div class="card stat-card accent animate-in">
-        <div class="stat-icon">📊</div>
+        <div class="stat-icon"><i class="fas fa-chart-bar"></i></div>
         <div class="card-title">Daily Average</div>
         @php
             $daysCount = count($dailySpending) ?: 1;
@@ -114,7 +114,7 @@
         </table>
     @else
         <div class="empty-state">
-            <div class="empty-icon">💸</div>
+            <div class="empty-icon"><i class="fas fa-money-bill-wave"></i></div>
             <h3>No transactions yet</h3>
             <p>Start logging with "spent 50rb mie ayam"</p>
         </div>

@@ -4,7 +4,7 @@
 @section('content')
 <div class="page-header animate-in">
     <div>
-        <h2>AI Logs 🤖</h2>
+        <h2>AI Logs</h2>
         <p>Parse calls, summary calls, latency, confidence, and failures</p>
     </div>
 </div>
@@ -14,25 +14,25 @@
 <!-- Stats -->
 <div class="grid-4">
     <div class="card stat-card blue animate-in">
-        <div class="stat-icon">📊</div>
+        <div class="stat-icon"><i class="fas fa-chart-bar"></i></div>
         <div class="card-title">Calls Today</div>
         <div class="card-value">{{ number_format($stats['total_today']) }}</div>
         <div class="card-subtitle">AI requests</div>
     </div>
     <div class="card stat-card red animate-in">
-        <div class="stat-icon">❌</div>
+        <div class="stat-icon"><i class="fas fa-circle-xmark"></i></div>
         <div class="card-title">Failures Today</div>
         <div class="card-value">{{ $stats['failures_today'] }}</div>
         <div class="card-subtitle">unsuccessful calls</div>
     </div>
     <div class="card stat-card orange animate-in">
-        <div class="stat-icon">⏱️</div>
+        <div class="stat-icon"><i class="fas fa-stopwatch"></i></div>
         <div class="card-title">Avg Latency</div>
         <div class="card-value">{{ $stats['avg_latency_ms'] }}ms</div>
         <div class="card-subtitle">today</div>
     </div>
     <div class="card stat-card green animate-in">
-        <div class="stat-icon">🎯</div>
+        <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
         <div class="card-title">Avg Confidence</div>
         <div class="card-value">{{ $stats['avg_confidence'] }}</div>
         <div class="card-subtitle">today</div>
@@ -155,9 +155,9 @@
                 </td>
                 <td>
                     @if($log->was_successful)
-                        <span style="color: var(--green); font-size: 12px;">✓</span>
+                        <i class="fas fa-check" style="color:var(--green);font-size:11px"></i>
                     @else
-                        <span style="color: var(--red); font-size: 12px;">✗</span>
+                        <i class="fas fa-xmark" style="color:var(--red);font-size:11px"></i>
                     @endif
                 </td>
                 <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-muted);" title="{{ $log->raw_input }}">

@@ -4,7 +4,7 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Distribusi Keuangan 💳</h2>
+        <h2>Distribusi Keuangan</h2>
         <p>Sebaran saldo dan pengeluaran per metode pembayaran bulan ini.</p>
     </div>
 </div>
@@ -12,23 +12,23 @@
 {{-- Summary Cards --}}
 <div class="grid-4 animate-in" style="animation-delay:.05s">
     <div class="card stat-card green">
-        <div class="stat-icon">💰</div>
+        <div class="stat-icon"><i class="fas fa-coins"></i></div>
         <div class="stat-label">Total Saldo</div>
         <div class="stat-value">Rp {{ number_format($totalBalance, 0, ',', '.') }}</div>
         <div class="stat-sub">{{ $accounts->count() }} akun aktif</div>
     </div>
     <div class="card stat-card red">
-        <div class="stat-icon">💸</div>
+        <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
         <div class="stat-label">Pengeluaran Bulan Ini</div>
         <div class="stat-value">Rp {{ number_format(array_sum($spendingByType), 0, ',', '.') }}</div>
     </div>
     <div class="card stat-card blue">
-        <div class="stat-icon">🏦</div>
+        <div class="stat-icon"><i class="fas fa-building-columns"></i></div>
         <div class="stat-label">Jumlah Akun</div>
         <div class="stat-value">{{ $accounts->count() }}</div>
     </div>
     <div class="card stat-card orange">
-        <div class="stat-icon">📊</div>
+        <div class="stat-icon"><i class="fas fa-chart-pie"></i></div>
         <div class="stat-label">Tipe Akun</div>
         <div class="stat-value">{{ count($byType) }}</div>
     </div>
@@ -37,7 +37,7 @@
 @if($accounts->isEmpty())
 <div class="card animate-in" style="animation-delay:.1s">
     <div class="empty-state">
-        <div class="empty-icon">💳</div>
+        <div class="empty-icon"><i class="fas fa-credit-card"></i></div>
         <h3>Belum Ada Akun</h3>
         <p>Tambah akun bank, e-wallet, atau cash melalui Telegram untuk melihat distribusi keuangan kamu.</p>
     </div>
@@ -89,9 +89,9 @@
                     </td>
                     <td>
                         @php $typeIcon = match($account->type ?? 'other') {
-                            'bank' => '🏦', 'ewallet' => '📱', 'emoney' => '💳', 'cash' => '💵', 'credit_card' => '💳', default => '📁'
+                            'bank' => 'fa-building-columns', 'ewallet' => 'fa-mobile-screen', 'emoney' => 'fa-credit-card', 'cash' => 'fa-money-bill', 'credit_card' => 'fa-credit-card', default => 'fa-folder'
                         }; @endphp
-                        <span style="font-size:13px;color:var(--text-secondary)">{{ $typeIcon }} {{ ucfirst($account->type ?? 'other') }}</span>
+                        <span style="font-size:13px;color:var(--text-secondary)"><i class="fas {{ $typeIcon }}"></i> {{ ucfirst($account->type ?? 'other') }}</span>
                     </td>
                     <td style="text-align:right;font-weight:700;color:var(--text-primary)">Rp {{ number_format($account->current_balance, 0, ',', '.') }}</td>
                     <td style="text-align:right;color:var(--text-secondary)">

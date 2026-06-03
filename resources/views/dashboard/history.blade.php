@@ -138,7 +138,7 @@
     </table>
     @else
     <div style="padding:48px 24px;text-align:center;color:var(--text-dim)">
-        <div style="font-size:32px;margin-bottom:12px">📋</div>
+        <div style="font-size:32px;margin-bottom:12px"><i class="fas fa-clipboard-list" style="color:var(--text-dim)"></i></div>
         <div>Belum ada catatan yang cocok.</div>
         @if(request()->hasAny(['type','from','to','min_amount','max_amount','fund_id']))
             <a href="{{ route('dashboard.history') }}" style="font-size:13px;color:var(--accent);margin-top:8px;display:inline-block">

@@ -2,25 +2,25 @@
     $adminNav = [
         [
             'route'   => 'admin.users.index',
-            'icon'    => '👥',
+            'fa'      => 'fa-users',
             'label'   => 'Users',
             'desc'    => 'Semua pengguna',
         ],
         [
             'route'   => 'admin.ai-logs.index',
-            'icon'    => '🤖',
+            'fa'      => 'fa-robot',
             'label'   => 'AI Logs',
             'desc'    => 'Parse & latency',
         ],
         [
             'route'   => 'admin.unrecognized.index',
-            'icon'    => '🤔',
+            'fa'      => 'fa-circle-question',
             'label'   => 'Unrecognized',
             'desc'    => 'Pesan tak dikenali',
         ],
         [
             'route'   => 'admin.token-usage.index',
-            'icon'    => '🔢',
+            'fa'      => 'fa-hashtag',
             'label'   => 'Token Usage',
             'desc'    => 'Konsumsi token AI',
         ],
@@ -38,7 +38,7 @@
                   color:{{ $isActive ? 'var(--accent)' : 'var(--text-secondary)' }};
                   text-decoration:none;font-size:13px;font-weight:{{ $isActive ? '600' : '500' }};
                   box-shadow:var(--card-shadow);transition:border-color .2s,background .2s,color .2s;">
-            <span style="font-size:16px;line-height:1">{{ $nav['icon'] }}</span>
+            <i class="fas {{ $nav['fa'] }}" style="font-size:14px;width:16px;text-align:center"></i>
             <span>{{ $nav['label'] }}</span>
             @if($isActive)
                 <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>

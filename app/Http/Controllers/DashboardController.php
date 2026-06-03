@@ -463,8 +463,8 @@ class DashboardController extends Controller
         // Per-account transaction counts and spending
         foreach ($accounts as $account) {
             $data = $spendingByAccount->get($account->id);
-            $account->month_spending = $data->total ?? 0;
-            $account->month_tx_count = $data->tx_count ?? 0;
+            $account->month_spending = $data?->total ?? 0;
+            $account->month_tx_count = $data?->tx_count ?? 0;
         }
 
         // Spending by type
@@ -634,7 +634,7 @@ class DashboardController extends Controller
         // Payoff projections per debt
         foreach ($debts as $debt) {
             if ($debt->monthly_installment > 0) {
-                $monthsRemaining = ceil($debt->remaining_balance / $debt->monthly_installment);
+                $monthsRemaining = (int) ceil($debt->remaining_balance / $debt->monthly_installment);
                 $debt->months_remaining = $monthsRemaining;
                 $debt->projected_payoff = today()->addMonths($monthsRemaining)->format('M Y');
                 $debt->progress_pct = $debt->total_amount > 0
@@ -649,7 +649,7 @@ class DashboardController extends Controller
 
         // Overall projected payoff (longest)
         $maxMonths = $debts->max('months_remaining');
-        $overallPayoff = $maxMonths ? today()->addMonths($maxMonths)->format('M Y') : null;
+        $overallPayoff = $maxMonths ? today()->addMonths((int) $maxMonths)->format('M Y') : null;
 
         // Bills this month status
         $billsPaid = $bills->where('this_month_paid', true)->count();

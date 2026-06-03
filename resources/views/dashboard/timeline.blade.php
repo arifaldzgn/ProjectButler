@@ -4,7 +4,7 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Timeline Keuangan 📅</h2>
+        <h2>Timeline Keuangan</h2>
         <p>Semua transaksi hari ini dengan saldo berjalan.</p>
     </div>
 </div>
@@ -47,17 +47,17 @@
 {{-- Daily Summary Cards --}}
 <div class="grid-3 animate-in" style="animation-delay:.08s">
     <div class="card stat-card green">
-        <div class="stat-icon">📥</div>
+        <div class="stat-icon"><i class="fas fa-arrow-down"></i></div>
         <div class="stat-label">Total Masuk</div>
         <div class="stat-value">Rp {{ number_format($totalIn, 0, ',', '.') }}</div>
     </div>
     <div class="card stat-card red">
-        <div class="stat-icon">📤</div>
+        <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
         <div class="stat-label">Total Keluar</div>
         <div class="stat-value">Rp {{ number_format($totalOut, 0, ',', '.') }}</div>
     </div>
     <div class="card stat-card {{ ($totalIn - $totalOut) >= 0 ? 'green' : 'red' }}">
-        <div class="stat-icon">⚖️</div>
+        <div class="stat-icon"><i class="fas fa-scale-balanced"></i></div>
         <div class="stat-label">Net Hari Ini</div>
         <div class="stat-value">
             {{ ($totalIn - $totalOut) >= 0 ? '+' : '' }}Rp {{ number_format($totalIn - $totalOut, 0, ',', '.') }}
@@ -67,11 +67,11 @@
 
 {{-- Transaction Timeline --}}
 <div class="card animate-in" style="animation-delay:.12s">
-    <div class="card-title" style="margin-bottom:16px">📋 Transaksi</div>
+    <div class="card-title" style="margin-bottom:16px"><i class="fas fa-list" style="margin-right:5px"></i> Transaksi</div>
 
     @if($entries->isEmpty())
     <div class="empty-state" style="padding:32px 0">
-        <div class="empty-icon">📭</div>
+        <div class="empty-icon"><i class="fas fa-inbox"></i></div>
         <h3>Tidak ada transaksi</h3>
         <p>Belum ada catatan untuk tanggal ini.</p>
     </div>
@@ -87,10 +87,10 @@
             $isOut = in_array($entry->type, ['expense','bill_payment','debt_payment','saving','sinking_fund_deposit']);
             $dotColor = $isIn ? '#10b981' : ($entry->type === 'meal' ? '#f97316' : ($entry->type === 'transfer' ? '#3b82f6' : '#ef4444'));
             $icon = match($entry->type) {
-                'expense' => '💸', 'income' => '💰', 'meal' => '🍽️',
-                'saving' => '💎', 'sinking_fund_deposit' => '✈️',
-                'bill_payment' => '🧾', 'debt_payment' => '💳',
-                'transfer' => '🔄', default => '📝'
+                'expense' => 'fa-arrow-trend-down', 'income' => 'fa-coins', 'meal' => 'fa-utensils',
+                'saving' => 'fa-piggy-bank', 'sinking_fund_deposit' => 'fa-bullseye',
+                'bill_payment' => 'fa-receipt', 'debt_payment' => 'fa-credit-card',
+                'transfer' => 'fa-arrows-rotate', default => 'fa-pen-to-square'
             };
             $desc = $entry->food_item ?? $entry->merchant ?? $entry->note ?? ucfirst(str_replace('_',' ',$entry->type));
         @endphp
@@ -101,7 +101,7 @@
 
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
                 <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
-                    <span style="font-size:18px">{{ $icon }}</span>
+                    <i class="fas {{ $icon }}" style="font-size:16px;color:{{ $dotColor }};width:20px;text-align:center;flex-shrink:0"></i>
                     <div style="min-width:0">
                         <div style="font-weight:600;color:var(--text-primary);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                             {{ $desc }}
@@ -135,7 +135,7 @@
 
 {{-- Monthly heatmap calendar --}}
 <div class="card animate-in" style="animation-delay:.18s">
-    <div class="card-title" style="margin-bottom:14px">🗓️ Kalender Pengeluaran — {{ $date->translatedFormat('F Y') }}</div>
+    <div class="card-title" style="margin-bottom:14px"><i class="fas fa-calendar-days" style="margin-right:5px"></i> Kalender Pengeluaran — {{ $date->translatedFormat('F Y') }}</div>
 
     <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center">
         @foreach(['Sen','Sel','Rab','Kam','Jum','Sab','Min'] as $d)

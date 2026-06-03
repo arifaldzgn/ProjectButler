@@ -4,7 +4,7 @@
 @section('content')
 
 <div class="page-header animate-in">
-    <h2>Settings ⚙️</h2>
+    <h2>Settings</h2>
     <p>Ubah profil, budget, dan preferensi Butler-mu</p>
 </div>
 
@@ -44,9 +44,9 @@
         <div class="field">
             <label class="field-label" for="tracking_mode">Mode Tracking</label>
             <select class="field-input" id="tracking_mode" name="tracking_mode">
-                <option value="finance"  {{ $user->tracking_mode === 'finance'  ? 'selected' : '' }}>💸 Finance Only</option>
-                <option value="calorie"  {{ $user->tracking_mode === 'calorie'  ? 'selected' : '' }}>🔥 Calorie Only</option>
-                <option value="both"     {{ $user->tracking_mode === 'both'     ? 'selected' : '' }}>💸🔥 Finance + Calorie</option>
+                <option value="finance"  {{ $user->tracking_mode === 'finance'  ? 'selected' : '' }}>Finance Only</option>
+                <option value="calorie"  {{ $user->tracking_mode === 'calorie'  ? 'selected' : '' }}>Calorie Only</option>
+                <option value="both"     {{ $user->tracking_mode === 'both'     ? 'selected' : '' }}>Finance + Calorie</option>
             </select>
         </div>
 
@@ -109,9 +109,9 @@
                 @php $goalType = old('calorie_goal_type', $user->calorie_goal_type ?? 'maintenance'); @endphp
 
                 @foreach([
-                    ['value' => 'bulking',     'emoji' => '💪', 'label' => 'Bulking',      'desc' => 'Naikkan massa otot'],
-                    ['value' => 'maintenance', 'emoji' => '⚖️', 'label' => 'Maintenance',   'desc' => 'Jaga berat badan'],
-                    ['value' => 'cutting',     'emoji' => '🎯', 'label' => 'Cutting',       'desc' => 'Turunkan lemak'],
+                    ['value' => 'bulking',     'fa' => 'fa-dumbbell',       'label' => 'Bulking',      'desc' => 'Naikkan massa otot'],
+                    ['value' => 'maintenance', 'fa' => 'fa-scale-balanced', 'label' => 'Maintenance',   'desc' => 'Jaga berat badan'],
+                    ['value' => 'cutting',     'fa' => 'fa-bullseye',       'label' => 'Cutting',       'desc' => 'Turunkan lemak'],
                 ] as $opt)
                 <label style="
                     display:flex;flex-direction:column;align-items:center;gap:6px;
@@ -124,7 +124,7 @@
                     <input type="radio" name="calorie_goal_type" value="{{ $opt['value'] }}"
                            {{ $goalType === $opt['value'] ? 'checked' : '' }}
                            style="display:none">
-                    <span style="font-size:22px">{{ $opt['emoji'] }}</span>
+                    <i class="fas {{ $opt['fa'] }}" style="font-size:20px"></i>
                     <span style="font-weight:600;color:var(--text-primary)">{{ $opt['label'] }}</span>
                     <span style="color:var(--text-muted);font-size:11px">{{ $opt['desc'] }}</span>
                 </label>
@@ -188,11 +188,11 @@
                 <div style="display:flex;gap:6px">
                     <button onclick="openEditCategory({{ $cat->id }}, '{{ addslashes($cat->name) }}', '{{ $cat->icon }}')"
                         style="padding:4px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);
-                               background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer">✏️</button>
+                               background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer"><i class="fas fa-pen"></i></button>
                     @if(!$cat->is_default)
                     <button onclick="deleteCategory({{ $cat->id }})"
                         style="padding:4px 10px;border-radius:var(--radius-sm);border:1px solid rgba(239,68,68,0.3);
-                               background:transparent;color:var(--red);font-size:11px;cursor:pointer">🗑️</button>
+                               background:transparent;color:var(--red);font-size:11px;cursor:pointer"><i class="fas fa-trash"></i></button>
                     @endif
                 </div>
             </div>
@@ -233,11 +233,11 @@
             @php
                 $tid = $user->telegram_chat_id;
                 $steps = [
-                    ['route' => 'onboarding.profile',       'label' => '👤 Profil'],
-                    ['route' => 'onboarding.accounts',      'label' => '💳 Akun'],
-                    ['route' => 'onboarding.budget',        'label' => '📊 Budget'],
-                    ['route' => 'onboarding.health',        'label' => '🏃 Kesehatan'],
-                    ['route' => 'onboarding.notifications', 'label' => '🔔 Notifikasi'],
+                    ['route' => 'onboarding.profile',       'label' => 'Profil'],
+                    ['route' => 'onboarding.accounts',      'label' => 'Akun'],
+                    ['route' => 'onboarding.budget',        'label' => 'Budget'],
+                    ['route' => 'onboarding.health',        'label' => 'Kesehatan'],
+                    ['route' => 'onboarding.notifications', 'label' => 'Notifikasi'],
                 ];
             @endphp
             @foreach($steps as $step)
@@ -270,11 +270,11 @@
             @endif
             <div style="display:flex;justify-content:space-between;font-size:13px">
                 <span style="color:var(--text-muted)">Member sejak</span>
-                <span style="font-weight:600">{{ $user->created_at->format('d M Y') }}</span>
+                <span style="font-weight:600">{{ $user->created_at ? $user->created_at->format('d M Y') : '-' }}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px">
                 <span style="color:var(--text-muted)">Onboarding</span>
-                <span style="font-weight:600;color:var(--green)">✓ Selesai</span>
+                <span style="font-weight:600;color:var(--green)"><i class="fas fa-check" style="font-size:10px"></i> Selesai</span>
             </div>
         </div>
     </div>
@@ -282,7 +282,7 @@
     {{-- ── Save ─────────────────────────────────────────────────── --}}
     <div class="animate-in" style="animation-delay:.17s;padding-bottom:8px">
         <button type="submit" class="btn-save">
-            ✓ Simpan Pengaturan
+            <i class="fas fa-check"></i> Simpan Pengaturan
         </button>
     </div>
 
@@ -334,7 +334,7 @@ function closeCatModal() {
 async function saveCategory() {
     const id   = document.getElementById('cat-edit-id').value;
     const name = document.getElementById('cat-name-input').value.trim();
-    const icon = document.getElementById('cat-icon-input').value.trim() || '💰';
+    const icon = document.getElementById('cat-icon-input').value.trim() || 'fa-tag';
     const err  = document.getElementById('cat-err');
 
     if (!name) { err.textContent = 'Nama kategori tidak boleh kosong.'; err.style.display = 'block'; return; }

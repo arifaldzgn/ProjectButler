@@ -4,7 +4,7 @@
 @section('content')
 <div class="page-header animate-in">
     <div>
-        <h2>Unrecognized Messages 🤔</h2>
+        <h2>Unrecognized Messages</h2>
         <p>Phrases Butler's parser couldn't confidently route — grouped & ranked by frequency.</p>
     </div>
 </div>
@@ -14,19 +14,19 @@
 {{-- ── Stats ────────────────────────────────────────────────── --}}
 <div class="grid-3 animate-in" style="animation-delay:.04s">
     <div class="card stat-card red">
-        <div class="stat-icon">❓</div>
+        <div class="stat-icon"><i class="fas fa-circle-question"></i></div>
         <div class="card-title">Unrecognized (7d)</div>
         <div class="card-value">{{ number_format($stats['total_7d']) }}</div>
         <div class="card-subtitle">total fallbacks fired</div>
     </div>
     <div class="card stat-card orange">
-        <div class="stat-icon">🔁</div>
+        <div class="stat-icon"><i class="fas fa-arrows-rotate"></i></div>
         <div class="card-title">Unique Phrases (7d)</div>
         <div class="card-value">{{ number_format($stats['unique_phrases_7d']) }}</div>
         <div class="card-subtitle">distinct messages</div>
     </div>
     <div class="card stat-card blue">
-        <div class="stat-icon">👥</div>
+        <div class="stat-icon"><i class="fas fa-users"></i></div>
         <div class="card-title">Affected Users (7d)</div>
         <div class="card-value">{{ number_format($stats['unique_users_7d']) }}</div>
         <div class="card-subtitle">unique users</div>
@@ -36,7 +36,7 @@
 @if($stats['top_phrase'])
 <div class="card animate-in" style="animation-delay:.07s;background:rgba(249,115,22,0.04);border-color:rgba(249,115,22,0.18)">
     <div style="display:flex;gap:14px;align-items:flex-start">
-        <span style="font-size:24px;line-height:1">🏆</span>
+        <i class="fas fa-trophy" style="font-size:22px;color:var(--yellow);flex-shrink:0"></i>
         <div style="flex:1;min-width:0">
             <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:4px">
                 Top Unrecognized Phrase (7d)
@@ -134,7 +134,7 @@
                                 color:{{ $sugg['kind'] === 'unsupported' ? 'var(--red)' : 'var(--accent)' }};
                                 width:fit-content
                             ">
-                                {{ $sugg['kind'] === 'unsupported' ? '🚫 unsupported' : ($sugg['kind'] === 'unclear' ? '❓ unclear' : '🤔 did you mean') }}
+                                {{ $sugg['kind'] === 'unsupported' ? 'unsupported' : ($sugg['kind'] === 'unclear' ? 'unclear' : 'did you mean') }}
                             </span>
                             <span style="font-size:12px;color:var(--text-secondary)">
                                 {{ $sugg['label'] }}
@@ -162,7 +162,7 @@
 
     @else
     <div class="empty-state">
-        <div class="empty-icon">✨</div>
+        <div class="empty-icon"><i class="fas fa-circle-check"></i></div>
         <h3>Tidak ada pesan yang gagal dikenali</h3>
         <p>Butler memahami semua input pada rentang waktu ini.</p>
     </div>

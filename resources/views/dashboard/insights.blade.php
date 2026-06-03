@@ -3,14 +3,14 @@
 
 @section('content')
 <div class="page-header">
-    <h2>Insights & Trends 💡</h2>
+    <h2>Insights & Trends <i class="fas fa-lightbulb" style="font-size:18px;color:var(--yellow)"></i></h2>
     <p>Patterns and analytics across your daily habits</p>
 </div>
 
 <!-- Overview Stats -->
 <div class="grid-3">
     <div class="card stat-card accent animate-in">
-        <div class="stat-icon">📈</div>
+        <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
         <div class="card-title">Spending Trend</div>
         @php
             $spendingValues = array_values($dailySpending);
@@ -29,7 +29,7 @@
     </div>
 
     <div class="card stat-card orange animate-in">
-        <div class="stat-icon">🔥</div>
+        <div class="stat-icon"><i class="fas fa-fire"></i></div>
         <div class="card-title">Avg Daily Calories</div>
         @php
             $calValues = array_values($dailyCalories);
@@ -40,7 +40,7 @@
     </div>
 
     <div class="card stat-card green animate-in">
-        <div class="stat-icon">🎯</div>
+        <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
         <div class="card-title">Budget Health</div>
         @php
             $monthTotal = array_sum(array_values($dailySpending));
@@ -71,7 +71,7 @@
             </div>
         @else
             <div class="empty-state">
-                <div class="empty-icon">😊</div>
+                <div class="empty-icon"><i class="fas fa-face-smile"></i></div>
                 <h3>No mood data yet</h3>
                 <p>Send "mood: good, energi 4" to log!</p>
             </div>
@@ -86,7 +86,7 @@
             </div>
         @else
             <div class="empty-state">
-                <div class="empty-icon">📊</div>
+                <div class="empty-icon"><i class="fas fa-chart-bar"></i></div>
                 <h3>No spending data yet</h3>
                 <p>Start tracking to see your category breakdown!</p>
             </div>
@@ -96,29 +96,29 @@
 
 <!-- Insights Cards -->
 <div class="card animate-in" style="margin-top: 16px;">
-    <div class="card-title">🧠 AI Insights</div>
+    <div class="card-title"><i class="fas fa-brain" style="margin-right:5px;color:var(--accent)"></i> AI Insights</div>
     <div style="padding: 16px 0;">
         @php
             $insights = [];
 
             // Spending insights
             if ($trendPct > 10) {
-                $insights[] = ['icon' => '⚠️', 'text' => "Your spending increased by {$trendPct}% compared to last week. Try to cut down on non-essential expenses."];
+                $insights[] = ['fa' => 'fa-triangle-exclamation', 'color' => 'var(--orange)', 'text' => "Your spending increased by {$trendPct}% compared to last week. Try to cut down on non-essential expenses."];
             } elseif ($trendPct < -10) {
-                $insights[] = ['icon' => '✅', 'text' => "Great job! Spending decreased by " . abs($trendPct) . "% this week."];
+                $insights[] = ['fa' => 'fa-circle-check', 'color' => 'var(--green)', 'text' => "Great job! Spending decreased by " . abs($trendPct) . "% this week."];
             }
 
             // Calorie insights
             if ($avgCal > $calorieGoal * 1.1) {
                 $excess = $avgCal - $calorieGoal;
-                $insights[] = ['icon' => '⚠️', 'text' => "You're averaging {$excess} kcal above your daily goal. Consider lighter meals or more exercise."];
+                $insights[] = ['fa' => 'fa-triangle-exclamation', 'color' => 'var(--orange)', 'text' => "You're averaging {$excess} kcal above your daily goal. Consider lighter meals or more exercise."];
             } elseif ($avgCal > 0 && $avgCal < $calorieGoal * 0.7) {
-                $insights[] = ['icon' => '💡', 'text' => "You might not be eating enough. Average is only {$avgCal} kcal vs your {$calorieGoal} goal."];
+                $insights[] = ['fa' => 'fa-lightbulb', 'color' => 'var(--yellow)', 'text' => "You might not be eating enough. Average is only {$avgCal} kcal vs your {$calorieGoal} goal."];
             }
 
             // Budget insights
             if ($budgetPct > 80) {
-                $insights[] = ['icon' => '🔴', 'text' => "You've used {$budgetPct}% of your monthly budget. Be careful with remaining spending!"];
+                $insights[] = ['fa' => 'fa-circle-exclamation', 'color' => 'var(--red)', 'text' => "You've used {$budgetPct}% of your monthly budget. Be careful with remaining spending!"];
             }
 
             // Top category
@@ -127,17 +127,17 @@
                 arsort($categoryBreakdown);
                 $topCat = array_key_first($categoryBreakdown);
                 $topAmount = number_format($categoryBreakdown[$topCat], 0, ',', '.');
-                $insights[] = ['icon' => '📊', 'text' => "Your biggest spending category is '{$topCat}' at Rp {$topAmount} this month."];
+                $insights[] = ['fa' => 'fa-chart-bar', 'color' => 'var(--blue)', 'text' => "Your biggest spending category is '{$topCat}' at Rp {$topAmount} this month."];
             }
 
             if (empty($insights)) {
-                $insights[] = ['icon' => '🤖', 'text' => 'Start logging more data to get personalized insights! Send messages to your Butler Telegram bot.'];
+                $insights[] = ['fa' => 'fa-robot', 'color' => 'var(--accent)', 'text' => 'Start logging more data to get personalized insights! Send messages to your Butler Telegram bot.'];
             }
         @endphp
 
         @foreach($insights as $insight)
             <div style="display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid rgba(35,35,47,0.5);">
-                <span style="font-size: 20px;">{{ $insight['icon'] }}</span>
+                <i class="fas {{ $insight['fa'] }}" style="font-size:18px;color:{{ $insight['color'] }};flex-shrink:0;margin-top:2px"></i>
                 <p style="font-size: 14px; color: var(--text-secondary); line-height: 1.5;">{{ $insight['text'] }}</p>
             </div>
         @endforeach
@@ -250,7 +250,7 @@
                     min: 0, max: 5,
                     ticks: {
                         stepSize: 1,
-                        callback: v => ['', '😢', '😔', '😐', '😊', '🤩'][v] || v,
+                        callback: v => ['', '1', '2', '3', '4', '5'][v] || v,
                     },
                     grid: { color: 'rgba(35,35,47,0.5)' },
                 },

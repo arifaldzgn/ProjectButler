@@ -4,7 +4,7 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Cashflow Health 💹</h2>
+        <h2>Cashflow Health</h2>
         <p>Tren income vs pengeluaran 6 bulan terakhir dan pertumbuhan tabungan.</p>
     </div>
 </div>
@@ -13,7 +13,7 @@
 <div class="grid-4 animate-in" style="animation-delay:.05s">
     {{-- Health gauge card --}}
     <div class="card stat-card {{ $healthScore >= 60 ? 'green' : ($healthScore >= 30 ? 'orange' : 'red') }}" style="grid-column:span 1">
-        <div class="stat-icon">{{ $healthScore >= 60 ? '💚' : ($healthScore >= 30 ? '🟡' : '🔴') }}</div>
+        <div class="stat-icon"><i class="fas fa-heart-pulse"></i></div>
         <div class="stat-label">Health Score</div>
         <div class="stat-value">{{ $healthScore }}<span style="font-size:14px;font-weight:400">/100</span></div>
         <div style="margin-top:8px">
@@ -23,26 +23,26 @@
             </div>
         </div>
         <div class="stat-sub" style="margin-top:6px">
-            {{ $healthScore >= 60 ? 'Cashflow sehat 🎉' : ($healthScore >= 30 ? 'Bisa ditingkatkan' : 'Perlu perhatian') }}
+            {{ $healthScore >= 60 ? 'Cashflow sehat' : ($healthScore >= 30 ? 'Bisa ditingkatkan' : 'Perlu perhatian') }}
         </div>
     </div>
 
     <div class="card stat-card blue">
-        <div class="stat-icon">💰</div>
+        <div class="stat-icon"><i class="fas fa-coins"></i></div>
         <div class="stat-label">Expense Ratio</div>
         <div class="stat-value">{{ $expenseRatio }}%</div>
         <div class="stat-sub">dari income bulan ini</div>
     </div>
 
     <div class="card stat-card green">
-        <div class="stat-icon">🏦</div>
+        <div class="stat-icon"><i class="fas fa-building-columns"></i></div>
         <div class="stat-label">Total Tabungan</div>
         <div class="stat-value">Rp {{ $totalSavingsBalance >= 1000000 ? number_format($totalSavingsBalance/1000000,1).'jt' : number_format($totalSavingsBalance/1000,0).'k' }}</div>
         <div class="stat-sub">semua tipe dana</div>
     </div>
 
     <div class="card stat-card {{ isset($months[$bestMonth]) && $months[$bestMonth]['net'] > 0 ? 'green' : 'orange' }}">
-        <div class="stat-icon">🏆</div>
+        <div class="stat-icon"><i class="fas fa-trophy"></i></div>
         <div class="stat-label">Bulan Terbaik</div>
         <div class="stat-value" style="font-size:16px">{{ isset($months[$bestMonth]) ? $months[$bestMonth]['label'] : '—' }}</div>
         <div class="stat-sub">
@@ -64,7 +64,6 @@
         <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:28px;font-weight:800;color:{{ $band['color'] }}">{{ $healthData['score'] }}</span>
             <span style="font-size:14px;color:var(--text-muted)">/100</span>
-            <span style="font-size:18px">{{ $band['emoji'] }}</span>
             <span style="font-weight:600;font-size:13px;color:{{ $band['color'] }}">{{ $band['label'] }}</span>
         </div>
     </div>

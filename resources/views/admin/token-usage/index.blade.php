@@ -4,7 +4,7 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Token Usage 🔢</h2>
+        <h2>Token Usage</h2>
         <p>Konsumsi token AI per user dan per tipe panggilan.</p>
     </div>
 </div>

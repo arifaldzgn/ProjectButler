@@ -5,10 +5,10 @@
 @php
     $goalType      = $user->calorie_goal_type ?? 'maintenance';
     $goalMeta      = [
-        'bulking'     => ['emoji' => '💪', 'label' => 'Bulking',     'color' => 'var(--blue)'],
-        'maintenance' => ['emoji' => '⚖️',  'label' => 'Maintenance', 'color' => 'var(--green)'],
-        'cutting'     => ['emoji' => '🎯', 'label' => 'Cutting',     'color' => 'var(--orange)'],
-    ][$goalType] ?? ['emoji' => '⚖️', 'label' => 'Maintenance', 'color' => 'var(--green)'];
+        'bulking'     => ['fa' => 'fa-dumbbell',       'label' => 'Bulking',     'color' => 'var(--blue)'],
+        'maintenance' => ['fa' => 'fa-scale-balanced', 'label' => 'Maintenance', 'color' => 'var(--green)'],
+        'cutting'     => ['fa' => 'fa-bullseye',       'label' => 'Cutting',     'color' => 'var(--orange)'],
+    ][$goalType] ?? ['fa' => 'fa-scale-balanced', 'label' => 'Maintenance', 'color' => 'var(--green)'];
 
     $calPct    = $calorieGoal > 0 ? min(round(($todayMacros['calories'] / $calorieGoal) * 100), 100) : 0;
     $pctUsed   = $calPct;
@@ -20,7 +20,7 @@
 {{-- ── Header --}}
 <div class="page-header animate-in" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
     <div>
-        <h2>Nutrition 🍽️</h2>
+        <h2>Nutrition</h2>
         <p>Pantau kalori harian dan progress target-mu</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -30,12 +30,12 @@
             font-size:12px;font-weight:600;color:{{ $goalMeta['color'] }};
             display:flex;align-items:center;gap:5px;box-shadow:var(--card-shadow)
         ">
-            {{ $goalMeta['emoji'] }} {{ $goalMeta['label'] }}
+            <i class="fas {{ $goalMeta['fa'] }}"></i> {{ $goalMeta['label'] }}
         </div>
         <a href="{{ route('dashboard.settings') }}#kalori"
            style="padding:6px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);
                   background:var(--bg-card);font-size:12px;color:var(--text-muted);text-decoration:none;
-                  box-shadow:var(--card-shadow)">⚙️ Ubah Goal</a>
+                  box-shadow:var(--card-shadow)"><i class="fas fa-gear" style="margin-right:4px"></i>Ubah Goal</a>
     </div>
 </div>
 
@@ -43,7 +43,7 @@
 <div class="grid-4 animate-in" style="animation-delay:.04s">
 
     <div class="card stat-card orange">
-        <div class="stat-icon">🔥</div>
+        <div class="stat-icon"><i class="fas fa-fire"></i></div>
         <div class="card-title">Kalori Hari Ini</div>
         <div class="card-value">{{ number_format($todayMacros['calories']) }}</div>
         <div class="progress-bar">
@@ -53,7 +53,7 @@
     </div>
 
     <div class="card stat-card accent">
-        <div class="stat-icon">🍽️</div>
+        <div class="stat-icon"><i class="fas fa-utensils"></i></div>
         <div class="card-title">Makanan Hari Ini</div>
         <div class="card-value">{{ $todayMeals->count() }}</div>
         <div class="card-subtitle">
@@ -63,14 +63,14 @@
     </div>
 
     <div class="card stat-card blue">
-        <div class="stat-icon">📅</div>
+        <div class="stat-icon"><i class="fas fa-calendar"></i></div>
         <div class="card-title">Rata-rata 7 Hari</div>
         <div class="card-value">{{ number_format($avgCalories) }}</div>
         <div class="card-subtitle">kcal per hari</div>
     </div>
 
     <div class="card stat-card green">
-        <div class="stat-icon">🎯</div>
+        <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
         <div class="card-title">{{ $overBy > 0 ? 'Melebihi Target' : 'Sisa Hari Ini' }}</div>
         <div class="card-value" style="color: {{ $overBy > 0 ? 'var(--red)' : 'var(--green)' }}">
             {{ $overBy > 0 ? number_format($overBy) : number_format($remaining) }}
@@ -140,7 +140,7 @@
                     <div class="progress-bar"><div class="progress-fill" style="width:{{ min(100, $todayMacros['fat'] > 0 ? round(($todayMacros['fat'] / max(50, $todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat'])) * 100) : 0) }}%;background:#eab308"></div></div>
                 </div>
                 <div style="margin-top:4px;padding:8px;background:var(--bg-hover);border-radius:8px;font-size:11px;color:var(--text-muted)">
-                    Estimasi AI · Koreksi kalori di Telegram dengan tombol 🔢
+                    Estimasi AI · Koreksi kalori di Telegram dengan tombol #
                 </div>
             </div>
         </div>
@@ -154,7 +154,7 @@
         <div class="card-title" style="margin-bottom:0">Makanan Hari Ini</div>
         <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
             <span style="display:inline-block;width:8px;height:8px;background:var(--orange);border-radius:50%"></span>
-            kcal estimasi AI · klik ✏️ untuk koreksi
+            kcal estimasi AI · klik <i class="fas fa-pen" style="font-size:10px"></i> untuk koreksi
         </div>
     </div>
 
@@ -163,20 +163,20 @@
         <div class="meal-item" id="meal-row-{{ $meal->id }}">
             <div class="meal-info" style="flex:1;min-width:0">
                 <h4 style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                    🍽️ {{ $meal->food_item ?? '-' }}
+                    <i class="fas fa-utensils" style="font-size:12px;color:var(--orange)"></i> {{ $meal->food_item ?? '-' }}
                     @if($meal->is_calorie_estimated)
                         <span style="
                             display:inline-flex;align-items:center;gap:3px;
                             padding:2px 7px;border-radius:var(--radius-pill);
                             background:rgba(249,115,22,0.12);color:var(--orange);
                             font-size:10px;font-weight:600;
-                        " title="Diestimasi oleh AI berdasarkan database makanan umum">⚡ est. AI</span>
+                        " title="Diestimasi oleh AI berdasarkan database makanan umum"><i class="fas fa-bolt" style="font-size:8px"></i> est. AI</span>
                     @else
                         <span style="
                             padding:2px 7px;border-radius:var(--radius-pill);
                             background:rgba(16,185,129,0.12);color:var(--green);
                             font-size:10px;font-weight:600;
-                        ">✓ manual</span>
+                        ">manual</span>
                     @endif
                 </h4>
                 <p style="margin-top:3px">
@@ -193,7 +193,7 @@
                 <button type="button"
                     onclick="openCalEdit({{ $meal->id }}, '{{ addslashes($meal->food_item ?? '') }}', {{ $meal->calories ?? 0 }})"
                     style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;padding:4px 6px;border-radius:6px;line-height:1"
-                    title="Edit kalori">✏️</button>
+                    title="Edit kalori"><i class="fas fa-pen" style="font-size:12px"></i></button>
             </div>
         </div>
 
@@ -230,7 +230,7 @@
         @endforeach
     @else
         <div class="empty-state">
-            <div class="empty-icon">🍽️</div>
+            <div class="empty-icon"><i class="fas fa-utensils"></i></div>
             <h3>Belum ada makanan hari ini</h3>
             <p>Kirim "makan nasi goreng" ke Butler-mu!</p>
         </div>
@@ -240,7 +240,7 @@
 {{-- ── Calorie estimation info --}}
 <div class="card animate-in" style="animation-delay:.12s;background:rgba(249,115,22,0.04);border-color:rgba(249,115,22,0.15)">
     <div style="display:flex;gap:14px;align-items:flex-start">
-        <span style="font-size:22px;flex-shrink:0;line-height:1;margin-top:2px">⚡</span>
+        <i class="fas fa-bolt" style="font-size:18px;flex-shrink:0;margin-top:2px;color:var(--orange)"></i>
         <div>
             <div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px">
                 Tentang Estimasi Kalori AI
@@ -248,7 +248,7 @@
             <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
                 Kalori dihitung menggunakan estimasi AI berdasarkan rata-rata dari database makanan umum (USDA, FoodData Central, dan sumber makanan Asia Tenggara).
                 Karena variasi porsi dan resep, angka ini bisa berbeda.
-                Klik <strong>✏️</strong> di setiap makanan untuk koreksi manual — koreksi akan otomatis disimpan sebagai data "manual" (bukan estimasi).
+                Klik <strong><i class="fas fa-pen" style="font-size:10px"></i></strong> di setiap makanan untuk koreksi manual — koreksi akan otomatis disimpan sebagai data "manual" (bukan estimasi).
             </div>
         </div>
     </div>
@@ -279,11 +279,11 @@
                         <td>
                             @if($meal->is_calorie_estimated)
                                 <span class="badge" style="background:rgba(249,115,22,0.1);color:var(--orange)">
-                                    ⚡ est. AI
+                                    <i class="fas fa-bolt" style="font-size:9px"></i> est. AI
                                 </span>
                             @else
                                 <span class="badge" style="background:rgba(16,185,129,0.1);color:var(--green)">
-                                    ✓ manual
+                                    manual
                                 </span>
                             @endif
                         </td>
@@ -296,7 +296,7 @@
         </table>
     @else
         <div class="empty-state" style="padding:28px">
-            <div class="empty-icon">📋</div>
+            <div class="empty-icon"><i class="fas fa-clipboard-list"></i></div>
             <h3>Belum ada riwayat makanan</h3>
             <p>Mulai tracking mealmu!</p>
         </div>
@@ -347,7 +347,7 @@
             const row = document.getElementById('meal-row-' + id);
             if (row) {
                 row.querySelectorAll('[title*="Diestimasi"]').forEach(el => {
-                    el.outerHTML = '<span style="padding:2px 7px;border-radius:999px;background:rgba(16,185,129,0.12);color:var(--green);font-size:10px;font-weight:600">✓ manual</span>';
+                    el.outerHTML = '<span style="padding:2px 7px;border-radius:999px;background:rgba(16,185,129,0.12);color:var(--green);font-size:10px;font-weight:600">manual</span>';
                 });
             }
         } catch (e) {

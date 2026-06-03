@@ -4,7 +4,7 @@
 
 <div class="page-header animate-in">
     <div>
-        <h2>Admin Panel 🛠️</h2>
+        <h2>Admin Panel</h2>
         <p>Manage users, monitor AI performance, and review usage patterns.</p>
     </div>
 </div>
