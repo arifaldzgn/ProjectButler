@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Jobs\NotifySavingsGoalMilestone;
 use App\Models\Fund;
 use App\Models\FundTransaction;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class FundService
@@ -55,7 +57,34 @@ class FundService
      */
     public function creditFund(Fund $fund, int $amount, ?int $entryId = null, ?string $note = null): FundTransaction
     {
-        return $fund->credit($amount, $entryId, $note);
+        $transaction = $fund->credit($amount, $entryId, $note);
+        $this->checkGoalMilestone($fund->fresh());
+        return $transaction;
+    }
+
+    /**
+     * Check if a savings/goal fund has crossed a 25/50/75/100% milestone
+     * after a credit, and dispatch a Telegram notification if so.
+     */
+    private function checkGoalMilestone(Fund $fund): void
+    {
+        if (!$fund->target_amount || $fund->target_amount <= 0) {
+            return;
+        }
+
+        $pct = ($fund->current_balance / $fund->target_amount) * 100;
+
+        foreach ([25, 50, 75, 100] as $milestone) {
+            if ($pct >= $milestone) {
+                $cacheKey = "goal_milestone:{$fund->id}:{$milestone}";
+                if (!Cache::has($cacheKey)) {
+                    $user = $fund->user;
+                    if ($user && $user->telegram_chat_id) {
+                        NotifySavingsGoalMilestone::dispatch($user, $fund, $milestone);
+                    }
+                }
+            }
+        }
     }
 
     /**

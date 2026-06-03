@@ -3,6 +3,8 @@
 use App\Services\BillService;
 use App\Services\DebtService;
 use App\Services\DailySummaryService;
+use App\Services\RecurringEntryService;
+use App\Services\WeeklySummaryService;
 use App\Services\ReminderService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -63,11 +65,34 @@ Schedule::call(function () {
   ->timezone(config('butler.timezone'))
   ->description('Reset monthly bill/debt payment status');
 
+// ── Recurring Entries — every hour ───────────────────────────────────
+Schedule::call(function () {
+    app(RecurringEntryService::class)->processRecurringEntries();
+})->hourly()
+  ->description('Process due recurring entry templates');
+
+// ── Weekly Summary — every Sunday at 20:00 WIB ───────────────────────
+Schedule::call(function () {
+    app(WeeklySummaryService::class)->sendWeeklySummaries();
+})->weeklyOn(0, '20:00')                          // 0 = Sunday
+  ->timezone(config('butler.timezone'))
+  ->description('Weekly summary — sent every Sunday 20:00 per user timezone');
+
 // ── Manual Commands ──────────────────────────────────────────────────
 Artisan::command('butler:summary', function () {
     app(DailySummaryService::class)->sendAndStore();
     $this->info('Daily summaries sent.');
 })->purpose('Manually trigger daily summaries for all users');
+
+Artisan::command('butler:weekly-summary', function () {
+    app(WeeklySummaryService::class)->sendWeeklySummaries();
+    $this->info('Weekly summaries sent.');
+})->purpose('Manually trigger weekly summaries for all users');
+
+Artisan::command('butler:recurring', function () {
+    app(RecurringEntryService::class)->processRecurringEntries();
+    $this->info('Recurring entries processed.');
+})->purpose('Manually process due recurring entry templates');
 
 Artisan::command('butler:reminders {type=all}', function (string $type) {
     $service = app(ReminderService::class);

@@ -31,13 +31,35 @@ class TelegramWebhookController extends Controller
         }
 
         $message = $update['message'] ?? null;
-        if (!$message || !isset($message['text'])) {
+        if (!$message) {
+            return response()->json(['ok' => true]);
+        }
+
+        // Route photo messages to receipt scanning flow
+        if (isset($message['photo'])) {
+            $chatId = $message['chat']['id'];
+            if (!$this->isAllowedChat($chatId)) {
+                return response()->json(['ok' => true]);
+            }
+            $user = User::where('telegram_chat_id', (int) $chatId)->first();
+            if ($user && $user->onboarding_step === 'complete') {
+                // Get the highest-resolution photo
+                $photos  = $message['photo'];
+                $fileId  = end($photos)['file_id'];
+                $caption = $message['caption'] ?? '';
+                $user->update(['last_active_at' => now()]);
+                ProcessTelegramMessage::dispatch($user->id, (string) $chatId, "__photo:{$fileId}|caption:{$caption}")->onQueue('high');
+            }
+            return response()->json(['ok' => true]);
+        }
+
+        if (!isset($message['text'])) {
             return response()->json(['ok' => true]);
         }
 
         $chatId = $message['chat']['id'];
         $text   = trim($message['text']);
-        
+
         \Illuminate\Support\Facades\Log::info('WEBHOOK RECEIVED', ['chat_id' => $chatId, 'text' => $text]);
 
         // Optional: restrict to allowed chat IDs

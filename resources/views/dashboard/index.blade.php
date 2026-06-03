@@ -165,6 +165,44 @@
 
 </div>
 
+{{-- ── Financial Health Score ──────────────────────────────────── --}}
+@if(!empty($healthData))
+<div class="card animate-in" style="animation-delay:.07s">
+    @php
+        $band  = $healthData['band'];
+        $score = $healthData['score'];
+        $comps = $healthData['components'];
+    @endphp
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+            <div class="card-title">Financial Health Score</div>
+            <div style="display:flex;align-items:baseline;gap:8px">
+                <span style="font-size:36px;font-weight:800;color:{{ $band['color'] }}">{{ $score }}</span>
+                <span style="font-size:16px;color:var(--text-muted)">/100</span>
+                <span style="font-size:20px">{{ $band['emoji'] }}</span>
+                <span style="font-size:13px;font-weight:600;color:{{ $band['color'] }}">{{ $band['label'] }}</span>
+            </div>
+        </div>
+        <a href="{{ route('dashboard.cashflow') }}"
+           style="font-size:12px;color:var(--accent);text-decoration:none;border:1px solid var(--accent);
+                  padding:6px 12px;border-radius:var(--radius-sm)">Lihat Detail →</a>
+    </div>
+    {{-- Progress bar --}}
+    <div style="height:8px;border-radius:999px;background:var(--border);margin:12px 0;overflow:hidden">
+        <div style="height:100%;border-radius:999px;background:{{ $band['color'] }};width:{{ $score }}%;transition:width .6s ease"></div>
+    </div>
+    {{-- Component breakdown --}}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        @foreach($comps as $key => $comp)
+        <div style="padding:6px 8px;border-radius:var(--radius-sm);background:var(--bg);border:1px solid var(--border);text-align:center">
+            <div style="font-size:18px;font-weight:700;color:var(--text-primary)">{{ $comp['score'] }}<span style="font-size:10px;color:var(--text-dim)">/{{ $comp['max'] }}</span></div>
+            <div style="font-size:9px;color:var(--text-dim);margin-top:2px;text-transform:capitalize">{{ str_replace('_', ' ', $key) }}</div>
+        </div>
+        @endforeach
+    </div>
+</div>
+@endif
+
 {{-- ── 7-day spending chart + category breakdown ───────────────── --}}
 <div class="grid-2 animate-in" style="animation-delay:.08s">
 

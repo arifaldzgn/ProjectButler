@@ -4,12 +4,14 @@ namespace App\Services;
 
 use App\Jobs\ProcessBehavioralCorrection;
 use App\Jobs\UpdateBehavioralMemory;
+use App\Models\Category;
 use App\Models\Entry;
 use App\Models\Fund;
 use App\Models\MoodLog;
 use App\Models\User;
 use App\Services\BehavioralMemoryService;
 use App\Services\PolicyEngine;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
@@ -90,15 +92,32 @@ class MessageRouter
             return;
         }
 
+        // ── Gate 0: Photo / Receipt scan ───────────────────────────────
+        if (str_starts_with($message, '__photo:')) {
+            $this->handleReceiptPhoto($user, $chatId, $message);
+            return;
+        }
+
+        // ── Gate 2a: Pending calorie correction ────────────────────────
+        if ($this->handleCalorieCorrection($user, $chatId, $message)) {
+            return;
+        }
+
         // ── Gate 2: Quick commands ──────────────────────────────────────
         if ($this->handleQuickCommand($user, $chatId, $message)) {
             return;
         }
 
         // ── Gate 3: AI parse ────────────────────────────────────────────
+        // Pass user's custom category names so the AI can use them
+        $userCategoryNames = Category::forUser($user->id)
+            ->ordered()
+            ->pluck('name')
+            ->toArray();
+
         $startTime = microtime(true);
         try {
-            $parsed = $this->ai->parseMessage($message, $user->name);
+            $parsed = $this->ai->parseMessage($message, $user->name, $userCategoryNames);
             $latencyMs = $parsed['_latency_ms'] ?? (int) ((microtime(true) - $startTime) * 1000);
 
             if (!$parsed) {
@@ -106,7 +125,8 @@ class MessageRouter
                 return;
             }
 
-            $this->aiLog->logParseCall($user, $message, $parsed, $latencyMs);
+            $tokenUsage = $this->ai->getLastTokenUsage();
+            $this->aiLog->logParseCall($user, $message, $parsed, $latencyMs, true, null, $tokenUsage);
 
         } catch (\Exception $e) {
             $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
@@ -178,6 +198,12 @@ class MessageRouter
         // ── v2.1: Account selection (needs_clarification mode) ──────────
         if (str_starts_with($data, 'acct_sel:')) {
             $this->handleAccountSelectionCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── v2.5: Calorie edit callback ─────────────────────────────────
+        if (str_starts_with($data, 'cal_edit:')) {
+            $this->handleCalorieEditCallback($user, $chatId, $callbackQueryId, $data);
             return;
         }
 
@@ -326,6 +352,12 @@ class MessageRouter
         // Direct balance shortcut — bypass AI entirely
         if (in_array($msg, ['saldo', 'balance', '/saldo', '/balance', 'cek saldo', 'lihat saldo'])) {
             $this->handleQueryBalance($user, $chatId, []);
+            return true;
+        }
+
+        // Budget suggestion quick command
+        if (in_array($msg, ['saran budget', 'budget suggestion', '/saran budget', 'saran keuangan', '/saranbudget'])) {
+            app(\App\Services\BudgetSuggestionService::class)->sendSuggestion($user);
             return true;
         }
 
@@ -1238,6 +1270,94 @@ class MessageRouter
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // v2.5 — CALORIE EDIT VIA TELEGRAM
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Handle the [🔢 Edit Kalori] button tap.
+     * Stores the entry ID in cache so the next text message is treated as the new calorie value.
+     */
+    private function handleCalorieEditCallback(User $user, string $chatId, string $callbackQueryId, string $data): void
+    {
+        $entryId = (int) substr($data, 9); // strip "cal_edit:"
+
+        $entry = Entry::forUser($user->id)
+            ->where('type', 'meal')
+            ->where('status', 'confirmed')
+            ->where('created_at', '>=', now()->subMinutes(30))
+            ->find($entryId);
+
+        if (!$entry) {
+            $this->telegram->answerCallbackQuery($callbackQueryId, 'Entry tidak ditemukan atau sudah kedaluwarsa.');
+            return;
+        }
+
+        // Store pending correction in cache (5-minute TTL)
+        Cache::put("cal_correction:{$chatId}", $entryId, now()->addMinutes(5));
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+        $this->telegram->sendMessage(
+            $chatId,
+            "🔢 Kirim jumlah kalori baru untuk *{$entry->food_item}* (sekarang: {$entry->calories} kcal):\n\n_Contoh: `350` atau `350 kcal`_"
+        );
+    }
+
+    /**
+     * Handle a pending calorie correction — user sends a number after tapping [🔢 Edit Kalori].
+     * Returns true if this message was consumed as a correction (caller should stop).
+     */
+    private function handleCalorieCorrection(User $user, string $chatId, string $message): bool
+    {
+        $entryId = Cache::get("cal_correction:{$chatId}");
+        if (!$entryId) {
+            return false;
+        }
+
+        // Extract number from input: "350", "350 kcal", "350kcal"
+        $cleaned = trim(preg_replace('/\s*(kcal|kkal|kalori|cal)\s*/i', '', $message));
+
+        if (!is_numeric($cleaned) || (int) $cleaned <= 0) {
+            $this->telegram->sendMessage($chatId, "Kirim angka kalori saja ya, contoh: `350`");
+            return true; // Consumed the message — keep cache alive
+        }
+
+        $newCalories = (int) $cleaned;
+
+        $entry = Entry::forUser($user->id)
+            ->where('type', 'meal')
+            ->where('status', 'confirmed')
+            ->find($entryId);
+
+        if (!$entry) {
+            Cache::forget("cal_correction:{$chatId}");
+            $this->telegram->sendMessage($chatId, 'Entry tidak ditemukan. Coba log ulang ya!');
+            return true;
+        }
+
+        $oldCalories = $entry->calories;
+        $entry->update(['calories' => $newCalories, 'is_calorie_estimated' => false]);
+
+        // Update behavioral memory for this food item
+        if ($entry->food_item) {
+            $this->memory->observe($user->id, 'food_calories', $entry->food_item, [
+                'calories' => $newCalories,
+            ]);
+        }
+
+        Cache::forget("cal_correction:{$chatId}");
+
+        $totalCal = $this->entries->getTodayCalories($user);
+        $goalStr = $user->daily_calorie_goal ? "/{$user->daily_calorie_goal}" : '';
+
+        $this->telegram->sendMessage(
+            $chatId,
+            "✅ Kalori *{$entry->food_item}* diupdate: {$oldCalories} → {$newCalories} kcal\n🔥 Total hari ini: {$totalCal}{$goalStr} kcal"
+        );
+
+        return true;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // HELPERS
     // ════════════════════════════════════════════════════════════════════
 
@@ -1359,7 +1479,9 @@ class MessageRouter
             ['telegram_id' => $user->telegram_chat_id]
         );
 
-        $msgId = $this->telegram->sendConfirmedWithUndoAndEdit($chatId, $text, $undoToken, $editUrl);
+        // For meal entries, include a [🔢 Edit Kalori] button
+        $mealEntryId = in_array($entry->type, ['meal', 'log_meal_and_expense']) ? $entry->id : null;
+        $msgId = $this->telegram->sendConfirmedWithUndoAndEdit($chatId, $text, $undoToken, $editUrl, $mealEntryId);
         if ($msgId) {
             $entry->update(['telegram_message_id' => $msgId]);
         }
@@ -1486,5 +1608,67 @@ class MessageRouter
             $this->memory->denyConsent($user->id, $domain, $subject);
             $this->telegram->editMessage($chatId, $messageId, 'Oke, tidak akan aku otomatisin.');
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // RECEIPT PHOTO SCANNING
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Handle incoming photo message — attempt receipt OCR via vision AI.
+     *
+     * Message format: "__photo:{fileId}|caption:{optionalCaption}"
+     */
+    private function handleReceiptPhoto(User $user, string $chatId, string $message): void
+    {
+        // Parse file_id and optional caption from the sentinel message
+        preg_match('/^__photo:([^\|]+)/', $message, $fileMatch);
+        preg_match('/\|caption:(.*)$/', $message, $captionMatch);
+
+        $fileId  = $fileMatch[1] ?? null;
+        $caption = $captionMatch[1] ?? '';
+
+        if (!$fileId) {
+            $this->telegram->sendMessage($chatId, 'Foto tidak bisa diproses, coba lagi ya.');
+            return;
+        }
+
+        // Acknowledge receipt
+        $this->telegram->sendMessage($chatId, '🧾 Sedang memindai struk...');
+
+        $scanner = app(\App\Services\ReceiptScanService::class);
+        $receiptData = $scanner->extractFromTelegramPhoto($fileId, $caption);
+
+        if (!$receiptData || ($receiptData['confidence'] ?? 1) < 0.4) {
+            $this->telegram->sendMessage(
+                $chatId,
+                "Hmm, Butler tidak bisa baca struk ini. 😕\n\nCoba foto lebih dekat, atau ketik manual ya: _makan warteg 25k_"
+            );
+            return;
+        }
+
+        // Map to standard parsed format and create pending entry
+        $parsed = $scanner->mapToEntryParsed($receiptData);
+        $rawMessage = $caption ?: "Struk {$receiptData['merchant']}";
+        $entry  = $this->entryService->createPendingEntry($user, $parsed, $rawMessage);
+
+        // Show confirmation with receipt details
+        $amountF    = 'Rp ' . number_format($entry->amount ?? 0, 0, ',', '.');
+        $merchantStr = $entry->merchant ? " di *{$entry->merchant}*" : '';
+        $itemsStr   = '';
+        if (!empty($receiptData['items'])) {
+            $itemLines = collect($receiptData['items'])->take(4)->map(fn($i) =>
+                "  • {$i['name']}: Rp " . number_format($i['price'] ?? 0, 0, ',', '.')
+            )->join("\n");
+            $itemsStr = "\n{$itemLines}";
+        }
+
+        $msg = "🧾 *Struk terdeteksi*{$merchantStr}\n\n💰 Total: *{$amountF}*{$itemsStr}\n\nKonfirmasi catat?";
+
+        $this->telegram->sendMessageWithInlineKeyboard(
+            $chatId,
+            $msg,
+            $this->telegram->buildConfirmationButtons($entry->id)
+        );
     }
 }

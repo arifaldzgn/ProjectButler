@@ -356,6 +356,15 @@ class TelegramService
             $msg .= " _(estimasi)_";
         }
 
+        // Macro breakdown if available
+        $hasMacros = isset($parsed['protein_g']) || isset($parsed['carbs_g']) || isset($parsed['fat_g']);
+        if ($hasMacros) {
+            $p = $parsed['protein_g'] ?? 0;
+            $c = $parsed['carbs_g'] ?? 0;
+            $f = $parsed['fat_g'] ?? 0;
+            $msg .= "\n💊 P:{$p}g · C:{$c}g · L:{$f}g _(est)_";
+        }
+
         $msg .= "\n";
 
         if ($confidence < 0.75) {
@@ -552,12 +561,19 @@ class TelegramService
      *
      * @return int|null  Telegram message_id
      */
-    public function sendConfirmedWithUndoAndEdit(string $chatId, string $text, string $undoToken, string $editUrl): ?int
+    public function sendConfirmedWithUndoAndEdit(string $chatId, string $text, string $undoToken, string $editUrl, ?int $mealEntryId = null): ?int
     {
-        $keyboard = ['inline_keyboard' => [[
+        $buttons = [
             $this->buildUndoButton($undoToken),
             ['text' => '✏️ Edit', 'url' => $editUrl],
-        ]]];
+        ];
+
+        // Add calorie edit button for meal entries
+        if ($mealEntryId) {
+            $buttons[] = ['text' => '🔢 Edit Kalori', 'callback_data' => "cal_edit:{$mealEntryId}"];
+        }
+
+        $keyboard = ['inline_keyboard' => [$buttons]];
 
         try {
             $response = Http::post("{$this->baseUrl}/sendMessage", [

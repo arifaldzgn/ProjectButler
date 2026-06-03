@@ -23,6 +23,9 @@ class Entry extends Model
         // Meal
         'food_item',
         'calories',
+        'protein_g',
+        'carbs_g',
+        'fat_g',
         'is_calorie_estimated',
         // Shared
         'note',
@@ -33,6 +36,8 @@ class Entry extends Model
         'ai_intent',
         'ai_confidence',
         'ai_prompt_version',
+        // Category
+        'category_id',
         // Lifecycle
         'confirmed_at',
         // v2.1 Undo + Correction
@@ -48,6 +53,9 @@ class Entry extends Model
         return [
             'amount'               => 'integer',
             'calories'             => 'integer',
+            'protein_g'            => 'decimal:1',
+            'carbs_g'              => 'decimal:1',
+            'fat_g'                => 'decimal:1',
             'is_calorie_estimated' => 'boolean',
             'source_fund_confirmed' => 'boolean',
             'ai_confidence'        => 'decimal:3',
@@ -84,6 +92,11 @@ class Entry extends Model
     public function sourceFund(): BelongsTo
     {
         return $this->belongsTo(Fund::class, 'source_fund_id');
+    }
+
+    public function customCategory(): BelongsTo
+    {
+        return $this->belongsTo(Category::class, 'category_id');
     }
 
     public function fundTransactions()

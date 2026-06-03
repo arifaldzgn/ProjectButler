@@ -140,7 +140,8 @@ class DailySummaryService
         $summaryText = $this->ai->generateSummary($context);
         $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
 
-        $this->aiLog->logSummaryCall($user, json_encode($context), $summaryText, $latencyMs, (bool) $summaryText);
+        $tokenUsage = $this->ai->getLastTokenUsage();
+        $this->aiLog->logSummaryCall($user, json_encode($context), $summaryText, $latencyMs, (bool) $summaryText, null, $tokenUsage);
 
         if (!$summaryText) {
             $summaryText = $entryCount === 0

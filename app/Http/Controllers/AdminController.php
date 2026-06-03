@@ -162,6 +162,90 @@ class AdminController extends Controller
         return view('admin.unrecognized.index', compact('grouped', 'stats', 'from', 'to', 'minCnt'));
     }
 
+    /**
+     * Token usage analytics — per-user breakdown of AI token consumption.
+     */
+    public function tokenUsage(Request $request)
+    {
+        $period = $request->input('period', '7d');
+        $fromDate = match ($period) {
+            '30d' => now()->subDays(30),
+            'all' => null,
+            default => now()->subDays(7),
+        };
+
+        // Per-user breakdown
+        $query = DB::table('ai_logs')
+            ->join('users', 'ai_logs.user_id', '=', 'users.id')
+            ->select(
+                'users.id as user_id',
+                'users.name as user_name',
+                DB::raw('COUNT(*) as total_calls'),
+                DB::raw('COALESCE(SUM(token_count_input), 0) as total_input'),
+                DB::raw('COALESCE(SUM(token_count_output), 0) as total_output'),
+                DB::raw('COALESCE(SUM(token_count_input), 0) + COALESCE(SUM(token_count_output), 0) as total_tokens'),
+                DB::raw('ROUND((COALESCE(SUM(token_count_input), 0) + COALESCE(SUM(token_count_output), 0)) / COUNT(*)) as avg_per_call')
+            )
+            ->whereNotNull('ai_logs.user_id');
+
+        if ($fromDate) {
+            $query->where('ai_logs.created_at', '>=', $fromDate);
+        }
+
+        $perUser = $query->groupBy('users.id', 'users.name')
+            ->orderByDesc('total_tokens')
+            ->get();
+
+        // By call type
+        $callTypeQuery = DB::table('ai_logs')
+            ->select(
+                'call_type',
+                DB::raw('COUNT(*) as total_calls'),
+                DB::raw('COALESCE(SUM(token_count_input), 0) as total_input'),
+                DB::raw('COALESCE(SUM(token_count_output), 0) as total_output'),
+                DB::raw('COALESCE(SUM(token_count_input), 0) + COALESCE(SUM(token_count_output), 0) as total_tokens')
+            );
+
+        if ($fromDate) {
+            $callTypeQuery->where('created_at', '>=', $fromDate);
+        }
+
+        $byCallType = $callTypeQuery->groupBy('call_type')
+            ->orderByDesc('total_tokens')
+            ->get();
+
+        // System totals
+        $totalsQuery = DB::table('ai_logs');
+        if ($fromDate) {
+            $totalsQuery->where('created_at', '>=', $fromDate);
+        }
+
+        $systemTotals = $totalsQuery->selectRaw('
+            COUNT(*) as total_calls,
+            COALESCE(SUM(token_count_input), 0) as total_input,
+            COALESCE(SUM(token_count_output), 0) as total_output,
+            COALESCE(SUM(token_count_input), 0) + COALESCE(SUM(token_count_output), 0) as total_tokens,
+            COUNT(DISTINCT user_id) as unique_users
+        ')->first();
+
+        // Estimate cost (Gemini 2.0 Flash: ~$0.10/1M input, ~$0.40/1M output)
+        $estimatedCost = (($systemTotals->total_input * 0.10) + ($systemTotals->total_output * 0.40)) / 1_000_000;
+
+        // Populated ratio — what % of recent logs have token data
+        $recentQuery = DB::table('ai_logs');
+        if ($fromDate) {
+            $recentQuery->where('created_at', '>=', $fromDate);
+        }
+        $totalLogs = $recentQuery->count();
+        $populatedLogs = (clone $recentQuery)->whereNotNull('token_count_input')->count();
+        $populatedPct = $totalLogs > 0 ? round(($populatedLogs / $totalLogs) * 100) : 0;
+
+        return view('admin.token-usage.index', compact(
+            'perUser', 'byCallType', 'systemTotals', 'estimatedCost',
+            'period', 'populatedPct'
+        ));
+    }
+
     public function impersonate(Request $request, User $user)
     {
         $admin = $request->dashboard_user;

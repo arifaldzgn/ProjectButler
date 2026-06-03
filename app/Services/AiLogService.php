@@ -40,7 +40,8 @@ class AiLogService
         ?array $result,
         int $latencyMs,
         bool $success = true,
-        ?string $error = null
+        ?string $error = null,
+        ?array $tokenUsage = null
     ): AiLog {
         return $this->logCall([
             'user_id' => $user->id,
@@ -53,6 +54,8 @@ class AiLogService
             'latency_ms' => $latencyMs,
             'was_successful' => $success,
             'error_message' => $error,
+            'token_count_input' => $tokenUsage['input'] ?? null,
+            'token_count_output' => $tokenUsage['output'] ?? null,
         ]);
     }
 
@@ -101,7 +104,8 @@ class AiLogService
         ?string $summaryText,
         int $latencyMs,
         bool $success = true,
-        ?string $error = null
+        ?string $error = null,
+        ?array $tokenUsage = null
     ): AiLog {
         return $this->logCall([
             'user_id' => $user->id,
@@ -112,6 +116,8 @@ class AiLogService
             'latency_ms' => $latencyMs,
             'was_successful' => $success,
             'error_message' => $error,
+            'token_count_input' => $tokenUsage['input'] ?? null,
+            'token_count_output' => $tokenUsage['output'] ?? null,
         ]);
     }
 }

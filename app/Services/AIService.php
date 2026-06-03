@@ -7,10 +7,20 @@ use Illuminate\Support\Facades\Log;
 class AIService
 {
     private OpenRouterClient $aiClient;
+    private ?array $lastTokenUsage = null;
 
     public function __construct(OpenRouterClient $aiClient)
     {
         $this->aiClient = $aiClient;
+    }
+
+    /**
+     * Get the token usage from the last AI call.
+     * Returns ['input' => int|null, 'output' => int|null] or null.
+     */
+    public function getLastTokenUsage(): ?array
+    {
+        return $this->lastTokenUsage;
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -21,9 +31,9 @@ class AIService
      * Parse a user message and return structured JSON with confidence score.
      * This is Prompt A — deterministic, no personality.
      */
-    public function parseMessage(string $message, ?string $userName = null): ?array
+    public function parseMessage(string $message, ?string $userName = null, array $userCategories = []): ?array
     {
-        $systemPrompt = $this->buildParserPrompt();
+        $systemPrompt = $this->buildParserPrompt($userCategories);
         $startTime = microtime(true);
 
         try {
@@ -31,11 +41,13 @@ class AIService
             $latencyMs = (int) ((microtime(true) - $startTime) * 1000);
 
             if (!$response || !isset($response['data'])) {
+                $this->lastTokenUsage = null;
                 return null;
             }
 
             $result = $response['data'];
             $modelUsed = $response['model_used'] ?? 'unknown';
+            $this->lastTokenUsage = $response['token_usage'] ?? null;
 
             if (isset($result[0]) && !isset($result['intent'])) {
                 $result = $result[0];
@@ -104,11 +116,13 @@ PROMPT;
 
         try {
             $response = $this->aiClient->generateText($systemPrompt, $userContent);
+            $this->lastTokenUsage = $response['token_usage'] ?? null;
             if ($response && isset($response['text'])) {
                 return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
             }
             return null;
         } catch (\Exception $e) {
+            $this->lastTokenUsage = null;
             Log::error('AI summary generation failed', ['error' => $e->getMessage()]);
             return null;
         }
@@ -133,6 +147,7 @@ Jangan pernah kasih error teknis. Selalu kasih jalan keluar kalau bingung.
 PROMPT;
 
         $response = $this->aiClient->generateText($prompt, $message);
+        $this->lastTokenUsage = $response['token_usage'] ?? null;
         if ($response && isset($response['text'])) {
             return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
         }
@@ -143,12 +158,12 @@ PROMPT;
     // PROMPT BUILDERS
     // ════════════════════════════════════════════════════════════════════
 
-    private function buildParserPrompt(): string
+    private function buildParserPrompt(array $userCategories = []): string
     {
         $today = now()->timezone(config('butler.timezone'))->format('Y-m-d');
         $currentTime = now()->timezone(config('butler.timezone'))->format('H:i');
 
-        return <<<PROMPT
+        $prompt = <<<PROMPT
 You are a message parser for a personal finance and calorie tracking assistant called "Butler".
 Today is {$today}, current time is {$currentTime} (Asia/Jakarta).
 Your ONLY job: extract structured data, return valid JSON. Zero personality. Be deterministic.
@@ -177,6 +192,9 @@ The user speaks mixed Indonesian/English. Currency abbreviations:
   "confidence": <0.000–1.000>,
   "food_item": "<name>",
   "calories": <estimated kcal integer>,
+  "protein_g": <estimated protein in grams, integer or null>,
+  "carbs_g": <estimated carbs in grams, integer or null>,
+  "fat_g": <estimated fat in grams, integer or null>,
   "is_calorie_estimated": <true|false>,
   "note": "<null or context>",
   "entry_time": "<HH:mm or null>"
@@ -189,6 +207,9 @@ Use this when a message contains BOTH a food name AND a price.
   "confidence": <0.000–1.000>,
   "food_item": "<food name>",
   "calories": <estimated kcal integer>,
+  "protein_g": <estimated protein in grams, integer or null>,
+  "carbs_g": <estimated carbs in grams, integer or null>,
+  "fat_g": <estimated fat in grams, integer or null>,
   "is_calorie_estimated": <true|false>,
   "amount": <number IDR>,
   "category": "food_drink",
@@ -415,6 +436,14 @@ KEY RULE: If the user explicitly gives a calorie number (e.g. "tambahkan 1000kca
 - confidence reflects certainty about the ENTIRE parsing, not just intent
 - NEVER add personality, greetings, or commentary
 PROMPT;
+
+        // Append user-defined custom categories if available
+        if (!empty($userCategories)) {
+            $catList = implode(', ', array_map(fn($c) => '"' . $c . '"', $userCategories));
+            $prompt .= "\n\n═══ USER CUSTOM CATEGORIES ═══\nFor log_expense category field, prefer one of these user-defined categories if it fits: {$catList}.\nOtherwise fall back to the standard category values.";
+        }
+
+        return $prompt;
     }
 
     private function buildSummaryPrompt(): string
@@ -458,5 +487,103 @@ PROMPT;
     public function getSummaryPromptVersion(): string
     {
         return 'summary_daily_v1.2';
+    }
+
+    /**
+     * Generate a weekly summary narrative from aggregated 7-day context.
+     */
+    public function generateWeeklySummary(array $context): ?string
+    {
+        $systemPrompt = $this->buildWeeklySummaryPrompt();
+        $userContent  = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+
+        try {
+            $response = $this->aiClient->generateText($systemPrompt, $userContent);
+            $this->lastTokenUsage = $response['token_usage'] ?? null;
+            if ($response && isset($response['text'])) {
+                return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
+            }
+            return null;
+        } catch (\Exception $e) {
+            $this->lastTokenUsage = null;
+            Log::error('AI weekly summary failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    private function buildWeeklySummaryPrompt(): string
+    {
+        return <<<PROMPT
+You are Butler, a reflective weekly financial assistant.
+Write the weekly summary in Bahasa Indonesia, casual but grounded.
+Tone: analytical, honest, encouraging without being hollow. Under 130 words. Moderate emoji use.
+
+RULES:
+1. Open with the total spending and weekly budget status (over/under).
+2. Mention the biggest spending category.
+3. If calorie data exists, give a one-line calorie summary (avg/day or total).
+4. Compare to last week — only if the delta is meaningful (>10%).
+5. One actionable insight for the coming week — specific, not generic.
+   GOOD: "Pengeluaran transport naik 40% minggu ini — coba cek apakah bisa dikurangi."
+   BAD:  "Terus semangat dan jaga pengeluaran!"
+6. Mention logging streak if log_current > 3.
+7. Never guilt or shame. Never editorialize personal choices.
+8. If no entries: short re-engagement, max 2 sentences.
+
+FORMAT: Plain Telegram text, minimal markdown (*bold* for numbers only).
+
+EXAMPLE:
+"Minggu ini kamu habis *Rp 485.000* — di bawah budget mingguan 💚
+Terbesar: makanan (52%), diikuti transport (28%).
+
+Vs minggu lalu: pengeluaran turun 18%, bagus!
+Satu hal buat minggu depan: transport masih cukup besar — cari alternatif di hari kerja?
+
+🔥 Streak: 7 hari."
+PROMPT;
+    }
+
+    public function getWeeklySummaryPromptVersion(): string
+    {
+        return 'summary_weekly_v1.0';
+    }
+
+    /**
+     * Generate an AI-powered budget suggestion based on 30-day context.
+     */
+    public function generateBudgetSuggestion(array $context): ?string
+    {
+        $systemPrompt = <<<PROMPT
+You are Butler, a sharp personal finance coach.
+Write a concise budget suggestion in Bahasa Indonesia based on the user's 30-day spending data.
+Tone: direct, helpful, specific. Under 120 words. Use minimal emoji.
+
+RULES:
+1. State one key finding (biggest category or high expense ratio).
+2. Apply 50/30/20 rule if income is known — highlight the gap.
+3. Give ONE specific, actionable recommendation (with numbers).
+   GOOD: "Pengeluaran transport 28% income — coba target 15% dengan angkot/carpool sekali seminggu."
+   BAD:  "Coba kurangi pengeluaran supaya bisa lebih hemat!"
+4. If savings rate is < 10%: mention emergency fund urgency.
+5. Never shame the user. Never repeat the raw data back verbatim.
+6. End with one short motivational line (max 8 words).
+
+FORMAT: Plain Telegram text, *bold* for key numbers.
+PROMPT;
+
+        $userContent = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+
+        try {
+            $response = $this->aiClient->generateText($systemPrompt, $userContent);
+            $this->lastTokenUsage = $response['token_usage'] ?? null;
+            if ($response && isset($response['text'])) {
+                return $response['text'] . "\n\n[🤖 Model: {$response['model_used']}]";
+            }
+            return null;
+        } catch (\Exception $e) {
+            $this->lastTokenUsage = null;
+            Log::error('AI budget suggestion failed', ['error' => $e->getMessage()]);
+            return null;
+        }
     }
 }

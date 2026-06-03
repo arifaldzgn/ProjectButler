@@ -18,6 +18,12 @@
             'label'   => 'Unrecognized',
             'desc'    => 'Pesan tak dikenali',
         ],
+        [
+            'route'   => 'admin.token-usage.index',
+            'icon'    => '🔢',
+            'label'   => 'Token Usage',
+            'desc'    => 'Konsumsi token AI',
+        ],
     ];
 @endphp
 

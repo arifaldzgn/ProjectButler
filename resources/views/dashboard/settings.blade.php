@@ -163,6 +163,66 @@
         </div>
     </div>
 
+    {{-- ── Custom Categories ────────────────────────────────────── --}}
+    <div class="card animate-in" id="kategori" style="animation-delay:.13s">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div class="card-title" style="margin:0">Kategori Pengeluaran</div>
+            <button onclick="openAddCategory()"
+                style="padding:6px 14px;border-radius:var(--radius-sm);border:1px solid var(--accent);
+                       background:transparent;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">
+                + Tambah
+            </button>
+        </div>
+
+        <div id="cat-list" style="display:flex;flex-direction:column;gap:8px">
+            @foreach($userCategories as $cat)
+            <div id="cat-row-{{ $cat->id }}" style="display:flex;align-items:center;gap:10px;padding:8px 12px;
+                 border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg)">
+                <span style="font-size:20px">{{ $cat->icon }}</span>
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:600;font-size:13px;color:var(--text-primary)">{{ $cat->name }}</div>
+                    @if($cat->is_default)
+                    <div style="font-size:10px;color:var(--text-dim)">default</div>
+                    @endif
+                </div>
+                <div style="display:flex;gap:6px">
+                    <button onclick="openEditCategory({{ $cat->id }}, '{{ addslashes($cat->name) }}', '{{ $cat->icon }}')"
+                        style="padding:4px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                               background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer">✏️</button>
+                    @if(!$cat->is_default)
+                    <button onclick="deleteCategory({{ $cat->id }})"
+                        style="padding:4px 10px;border-radius:var(--radius-sm);border:1px solid rgba(239,68,68,0.3);
+                               background:transparent;color:var(--red);font-size:11px;cursor:pointer">🗑️</button>
+                    @endif
+                </div>
+            </div>
+            @endforeach
+        </div>
+
+        {{-- Add/Edit modal --}}
+        <div id="cat-modal" style="display:none;margin-top:14px;padding:14px;border-radius:var(--radius-sm);
+             border:1px solid var(--border);background:var(--bg)">
+            <input type="hidden" id="cat-edit-id" value="">
+            <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;margin-bottom:10px">
+                <input id="cat-name-input" type="text" placeholder="Nama kategori"
+                    style="padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                           background:var(--bg-card);color:var(--text-primary);font-size:13px">
+                <input id="cat-icon-input" type="text" placeholder="Emoji" maxlength="2"
+                    style="padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                           background:var(--bg-card);color:var(--text-primary);font-size:18px;text-align:center">
+            </div>
+            <div id="cat-err" style="display:none;font-size:12px;color:var(--red);margin-bottom:8px"></div>
+            <div style="display:flex;gap:8px">
+                <button onclick="saveCategory()"
+                    style="flex:1;padding:8px;border-radius:var(--radius-sm);border:none;
+                           background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer">Simpan</button>
+                <button onclick="closeCatModal()"
+                    style="padding:8px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);
+                           background:transparent;color:var(--text-muted);font-size:13px;cursor:pointer">Batal</button>
+            </div>
+        </div>
+    </div>
+
     {{-- ── Re-do Setup ──────────────────────────────────────────── --}}
     <div class="card animate-in" style="animation-delay:.14s">
         <div class="card-title">Ulangi Langkah Setup</div>
@@ -242,6 +302,73 @@ function selectGoalType(value, clickedLabel) {
     radio.checked = true;
     clickedLabel.style.borderColor = 'var(--accent)';
     clickedLabel.style.background  = 'rgba(139,92,246,0.08)';
+}
+
+// ── Category Management ───────────────────────────────────────────────
+const CAT_BASE = '{{ url("/dashboard/categories") }}';
+const CSRF_TOK = document.querySelector('meta[name=csrf-token]')?.content
+              || document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] || '';
+
+function openAddCategory() {
+    document.getElementById('cat-edit-id').value = '';
+    document.getElementById('cat-name-input').value = '';
+    document.getElementById('cat-icon-input').value = '';
+    document.getElementById('cat-err').style.display = 'none';
+    document.getElementById('cat-modal').style.display = 'block';
+    document.getElementById('cat-name-input').focus();
+}
+
+function openEditCategory(id, name, icon) {
+    document.getElementById('cat-edit-id').value = id;
+    document.getElementById('cat-name-input').value = name;
+    document.getElementById('cat-icon-input').value = icon;
+    document.getElementById('cat-err').style.display = 'none';
+    document.getElementById('cat-modal').style.display = 'block';
+    document.getElementById('cat-name-input').focus();
+}
+
+function closeCatModal() {
+    document.getElementById('cat-modal').style.display = 'none';
+}
+
+async function saveCategory() {
+    const id   = document.getElementById('cat-edit-id').value;
+    const name = document.getElementById('cat-name-input').value.trim();
+    const icon = document.getElementById('cat-icon-input').value.trim() || '💰';
+    const err  = document.getElementById('cat-err');
+
+    if (!name) { err.textContent = 'Nama kategori tidak boleh kosong.'; err.style.display = 'block'; return; }
+
+    const url    = id ? `${CAT_BASE}/${id}` : CAT_BASE;
+    const method = id ? 'PATCH' : 'POST';
+
+    try {
+        const resp = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': decodeURIComponent(CSRF_TOK) },
+            body: JSON.stringify({ name, icon }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { err.textContent = data.error || 'Gagal simpan.'; err.style.display = 'block'; return; }
+
+        // Reload page to reflect changes
+        location.reload();
+    } catch (e) {
+        err.textContent = 'Network error.'; err.style.display = 'block';
+    }
+}
+
+async function deleteCategory(id) {
+    if (!confirm('Hapus kategori ini?')) return;
+    try {
+        const resp = await fetch(`${CAT_BASE}/${id}`, {
+            method: 'DELETE',
+            headers: { 'X-XSRF-TOKEN': decodeURIComponent(CSRF_TOK) },
+        });
+        if (resp.ok) {
+            document.getElementById('cat-row-' + id)?.remove();
+        }
+    } catch (e) { /* ignore */ }
 }
 </script>
 

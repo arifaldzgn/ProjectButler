@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Category;
 use App\Models\Entry;
 use App\Models\User;
 use Carbon\Carbon;
@@ -45,15 +46,20 @@ class EntryService
 
         switch ($intent) {
             case 'log_expense':
-                $data['amount'] = $parsed['amount'] ?? 0;
+                $data['amount']   = $parsed['amount'] ?? 0;
                 $data['category'] = $parsed['category'] ?? 'other';
                 $data['merchant'] = $parsed['merchant'] ?? null;
-                $data['note'] = $parsed['note'] ?? null;
+                $data['note']     = $parsed['note'] ?? null;
+                // Resolve custom category if user has one matching
+                $data['category_id'] = $this->resolveCustomCategoryId($user, $parsed['category'] ?? null);
                 break;
 
             case 'log_meal':
                 $data['food_item'] = $parsed['food_item'] ?? 'Unknown food';
                 $data['calories'] = $parsed['calories'] ?? null;
+                $data['protein_g'] = $parsed['protein_g'] ?? null;
+                $data['carbs_g'] = $parsed['carbs_g'] ?? null;
+                $data['fat_g'] = $parsed['fat_g'] ?? null;
                 $data['is_calorie_estimated'] = $parsed['is_calorie_estimated'] ?? true;
                 $data['note'] = $parsed['note'] ?? null;
                 break;
@@ -127,6 +133,23 @@ class EntryService
             ->meals()->confirmed()->forDate($today)->sum('calories');
     }
 
+    /**
+     * Get today's macro totals: protein, carbs, fat in grams.
+     */
+    public function getTodayMacros(User $user): array
+    {
+        $today = Carbon::now($user->timezone)->toDateString();
+        $row = Entry::forUser($user->id)->meals()->confirmed()->forDate($today)
+            ->selectRaw('SUM(protein_g) as protein, SUM(carbs_g) as carbs, SUM(fat_g) as fat')
+            ->first();
+
+        return [
+            'protein' => round((float) ($row->protein ?? 0), 1),
+            'carbs'   => round((float) ($row->carbs ?? 0), 1),
+            'fat'     => round((float) ($row->fat ?? 0), 1),
+        ];
+    }
+
     public function getTodayIncome(User $user): int
     {
         $today = Carbon::now($user->timezone)->toDateString();
@@ -186,6 +209,38 @@ class EntryService
     {
         $today = Carbon::now($user->timezone)->toDateString();
         return Entry::forUser($user->id)->confirmed()->forDate($today)->count();
+    }
+
+    /**
+     * Fuzzy-match an AI-returned category string to a user's custom Category row.
+     * Returns null if no match found — falls back to the text-based category column.
+     */
+    private function resolveCustomCategoryId(User $user, ?string $aiCategory): ?int
+    {
+        if (!$aiCategory) {
+            return null;
+        }
+
+        $lower = strtolower(trim($aiCategory));
+
+        // Exact name match first
+        $match = Category::forUser($user->id)
+            ->whereRaw('LOWER(name) = ?', [$lower])
+            ->first();
+
+        if ($match) {
+            return $match->id;
+        }
+
+        // Partial match: category name contains the AI label or vice-versa
+        $categories = Category::forUser($user->id)->ordered()->get();
+        foreach ($categories as $cat) {
+            if (str_contains(strtolower($cat->name), $lower) || str_contains($lower, strtolower($cat->name))) {
+                return $cat->id;
+            }
+        }
+
+        return null;
     }
 
     private function mapIntentToType(string $intent): string

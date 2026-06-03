@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\BehavioralMemory;
 use App\Models\Entry;
 use App\Models\Reminder;
 use App\Models\User;
@@ -245,5 +246,106 @@ class ReminderService
             'name' => $user->name,
             'streak' => (string) ($streak->log_current ?? 0),
         ];
+    }
+
+    /**
+     * Analyse user's historical logging hours (last 14 days) and return
+     * the most common hour(s) with gaps — ideal reminder slots.
+     *
+     * Returns ['morning' => '07:00', 'evening' => '20:00'] or null for each.
+     * Requires at least 14 confirmed entries before making a suggestion.
+     *
+     * Algorithm:
+     *  1. Bucket entry created_at hours for the past 14 days.
+     *  2. Find gaps (hours with 0 logs after a busy period → good reminder slot).
+     *  3. Return up to 2 suggested times: one AM and one PM.
+     */
+    public function getOptimalReminderTime(User $user): array
+    {
+        $since = Carbon::now($user->timezone)->subDays(14);
+
+        $entries = Entry::forUser($user->id)
+            ->confirmed()
+            ->where('entry_time', '>=', $since)
+            ->get(['entry_time']);
+
+        if ($entries->count() < 14) {
+            return ['morning' => null, 'evening' => null, 'insufficient_data' => true];
+        }
+
+        // Build hour histogram (0-23)
+        $histogram = array_fill(0, 24, 0);
+        foreach ($entries as $entry) {
+            $hour = Carbon::parse($entry->entry_time)->timezone($user->timezone)->hour;
+            $histogram[$hour]++;
+        }
+
+        // Persist the full histogram as behavioral memory
+        $this->observeLogTiming($user, $histogram);
+
+        // Find gaps: hours with 0 activity that follow high-activity hours
+        $morningSlot = $this->findGapInRange($histogram, 6, 11);   // 06:00–11:59
+        $eveningSlot = $this->findGapInRange($histogram, 17, 22);  // 17:00–22:59
+
+        return [
+            'morning'          => $morningSlot ? sprintf('%02d:00', $morningSlot) : null,
+            'evening'          => $eveningSlot ? sprintf('%02d:00', $eveningSlot) : null,
+            'histogram'        => $histogram,
+            'insufficient_data'=> false,
+        ];
+    }
+
+    /**
+     * Find the first hour in a range where activity is 0 or minimal.
+     * Returns the hour number (0-23) or null.
+     */
+    private function findGapInRange(array $histogram, int $from, int $to): ?int
+    {
+        // If everything in the range is 0, just return the midpoint
+        $rangeMax = max(array_slice($histogram, $from, $to - $from + 1));
+        if ($rangeMax === 0) {
+            return (int) round(($from + $to) / 2);
+        }
+
+        // Return the first hour in range with below-average activity
+        $rangeTotal = array_sum(array_slice($histogram, $from, $to - $from + 1));
+        $rangeAvg   = $rangeTotal / ($to - $from + 1);
+        for ($h = $from; $h <= $to; $h++) {
+            if ($histogram[$h] <= $rangeAvg * 0.5) {
+                return $h;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Persist log_timing histogram to behavioral memory.
+     */
+    private function observeLogTiming(User $user, array $histogram): void
+    {
+        try {
+            $memory = BehavioralMemory::where('user_id', $user->id)
+                ->where('domain', BehavioralMemory::DOMAIN_LOG_TIMING)
+                ->where('subject', 'hour_histogram')
+                ->first();
+
+            $value = ['histogram' => $histogram, 'days_sampled' => 14, 'updated_at' => now()->toDateString()];
+
+            if ($memory) {
+                $memory->update(['value' => $value, 'confidence' => 0.8, 'last_observed_at' => now()]);
+            } else {
+                BehavioralMemory::create([
+                    'user_id'          => $user->id,
+                    'domain'           => BehavioralMemory::DOMAIN_LOG_TIMING,
+                    'subject'          => 'hour_histogram',
+                    'value'            => $value,
+                    'confidence'       => 0.8,
+                    'consent_status'   => 'none',
+                    'last_observed_at' => now(),
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::warning('Could not persist log_timing memory', ['error' => $e->getMessage()]);
+        }
     }
 }

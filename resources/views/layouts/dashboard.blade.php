@@ -561,6 +561,14 @@
             @endif
             <a href="{{ route('dashboard.insights') }}"
                class="nav-link {{ request()->routeIs('dashboard.insights') ? 'active' : '' }}">Insights</a>
+            <a href="{{ route('dashboard.distribution') }}"
+               class="nav-link {{ request()->routeIs('dashboard.distribution') ? 'active' : '' }}">Distribusi</a>
+            <a href="{{ route('dashboard.cashflow') }}"
+               class="nav-link {{ request()->routeIs('dashboard.cashflow') ? 'active' : '' }}">Cashflow</a>
+            <a href="{{ route('dashboard.timeline') }}"
+               class="nav-link {{ request()->routeIs('dashboard.timeline') ? 'active' : '' }}">Timeline</a>
+            <a href="{{ route('dashboard.debts') }}"
+               class="nav-link {{ request()->routeIs('dashboard.debts') ? 'active' : '' }}">Hutang</a>
             <a href="{{ route('dashboard.history') }}"
                class="nav-link {{ request()->routeIs('dashboard.history') ? 'active' : '' }}">Riwayat</a>
             <a href="{{ route('dashboard.memory') }}"

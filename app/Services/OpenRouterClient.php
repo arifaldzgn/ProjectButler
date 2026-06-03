@@ -61,6 +61,34 @@ class OpenRouterClient
     }
 
     /**
+     * Send a vision (image + text) request to a multimodal model and get JSON.
+     * Uses a vision-capable model (google/gemini-2.0-flash-001 supports images).
+     *
+     * @param  string $systemPrompt
+     * @param  string $imageBase64    Base64-encoded image data
+     * @param  string $mimeType       e.g. 'image/jpeg'
+     * @param  string $userText       Optional text alongside the image
+     * @return array|null             ['data' => parsedJson, 'model_used' => string, 'token_usage' => ...]
+     */
+    public function generateVisionJson(string $systemPrompt, string $imageBase64, string $mimeType = 'image/jpeg', string $userText = ''): ?array
+    {
+        $payload = [
+            'messages' => [
+                ['role' => 'system', 'content' => $systemPrompt],
+                ['role' => 'user', 'content' => array_filter([
+                    ['type' => 'image_url', 'image_url' => ['url' => "data:{$mimeType};base64,{$imageBase64}"]],
+                    $userText ? ['type' => 'text', 'text' => $userText] : null,
+                ])],
+            ],
+            'response_format' => ['type' => 'json_object'],
+            'temperature' => 0.1,
+            'max_tokens' => 400,
+        ];
+
+        return $this->executeWithFallback($payload, true);
+    }
+
+    /**
      * Executes the request with fallback logic.
      */
     private function executeWithFallback(array $payload, bool $isJson): ?array
@@ -98,15 +126,21 @@ class OpenRouterClient
                     throw new \Exception("OpenRouter API Error: Empty content from {$model}");
                 }
 
+                // Extract token usage from OpenRouter response
+                $tokenUsage = [
+                    'input'  => $data['usage']['prompt_tokens'] ?? null,
+                    'output' => $data['usage']['completion_tokens'] ?? null,
+                ];
+
                 if ($isJson) {
                     $parsed = json_decode($content, true);
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         throw new \Exception("OpenRouter API Error: Invalid JSON from {$model}");
                     }
-                    return ['data' => $parsed, 'model_used' => $model];
+                    return ['data' => $parsed, 'model_used' => $model, 'token_usage' => $tokenUsage];
                 }
 
-                return ['text' => $content, 'model_used' => $model];
+                return ['text' => $content, 'model_used' => $model, 'token_usage' => $tokenUsage];
 
             } catch (\Exception $e) {
                 $lastException = $e;

@@ -107,6 +107,47 @@
     </div>
 </div>
 
+{{-- Macro Breakdown (if any data) --}}
+@php $hasMacros = ($todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat']) > 0; @endphp
+@if($hasMacros)
+<div class="card animate-in" style="animation-delay:.08s">
+    <div class="card-title">Makro Hari Ini (Estimasi)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:center">
+        <div class="chart-container" style="height:180px">
+            <canvas id="macroChart"></canvas>
+        </div>
+        <div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                        <span style="color:#3b82f6;font-weight:600">Protein</span>
+                        <span style="font-weight:700;color:var(--text-primary)">{{ $todayMacros['protein'] }}g</span>
+                    </div>
+                    <div class="progress-bar"><div class="progress-fill blue" style="width:{{ min(100, $todayMacros['protein'] > 0 ? round(($todayMacros['protein'] / max(50, $todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat'])) * 100) : 0) }}%"></div></div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                        <span style="color:#f97316;font-weight:600">Karbohidrat</span>
+                        <span style="font-weight:700;color:var(--text-primary)">{{ $todayMacros['carbs'] }}g</span>
+                    </div>
+                    <div class="progress-bar"><div class="progress-fill orange" style="width:{{ min(100, $todayMacros['carbs'] > 0 ? round(($todayMacros['carbs'] / max(50, $todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat'])) * 100) : 0) }}%"></div></div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                        <span style="color:#eab308;font-weight:600">Lemak</span>
+                        <span style="font-weight:700;color:var(--text-primary)">{{ $todayMacros['fat'] }}g</span>
+                    </div>
+                    <div class="progress-bar"><div class="progress-fill" style="width:{{ min(100, $todayMacros['fat'] > 0 ? round(($todayMacros['fat'] / max(50, $todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat'])) * 100) : 0) }}%;background:#eab308"></div></div>
+                </div>
+                <div style="margin-top:4px;padding:8px;background:var(--bg-hover);border-radius:8px;font-size:11px;color:var(--text-muted)">
+                    Estimasi AI · Koreksi kalori di Telegram dengan tombol 🔢
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Today's Meals --}}
 <div class="card animate-in" style="animation-delay:.10s">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
@@ -360,6 +401,35 @@
             }
         }
     });
+
+    // ── Macro doughnut ───────────────────────────────────────────
+    @if(($todayMacros['protein'] + $todayMacros['carbs'] + $todayMacros['fat']) > 0)
+    new Chart(document.getElementById('macroChart'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Protein', 'Karbohidrat', 'Lemak'],
+            datasets: [{
+                data: [{{ $todayMacros['protein'] }}, {{ $todayMacros['carbs'] }}, {{ $todayMacros['fat'] }}],
+                backgroundColor: ['#3b82f6', '#f97316', '#eab308'],
+                borderWidth: 0,
+                hoverOffset: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '62%',
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ctx.label + ': ' + ctx.parsed + 'g'
+                    }
+                }
+            }
+        }
+    });
+    @endif
 
     // ── Calorie goal donut ────────────────────────────────────────
     const consumed = {{ $todayMacros['calories'] }};

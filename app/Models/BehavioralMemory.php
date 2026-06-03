@@ -45,6 +45,7 @@ class BehavioralMemory extends Model
     public const DOMAIN_MEAL_TIMING       = 'meal_timing';
     public const DOMAIN_CATEGORY_ACCOUNT  = 'category_account';
     public const DOMAIN_SPEND_RHYTHM      = 'spend_rhythm';
+    public const DOMAIN_LOG_TIMING        = 'log_timing';     // tracks typical logging hours
 
     // Confidence thresholds
     public const CONF_SUGGEST_MIN   = 0.50;

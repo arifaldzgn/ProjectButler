@@ -129,12 +129,23 @@ class DashboardController extends Controller
             ->whereNotNull('confirmed_at')->where('is_undone', false)
             ->orderByDesc('entry_time')->take(6)->get();
 
+        // ── Financial Health Score ────────────────────────────────
+        $healthData = null;
+        if ($user->isFinanceMode()) {
+            try {
+                $healthData = app(\App\Services\FinancialHealthService::class)->getOrCalculate($user);
+            } catch (\Exception $e) {
+                // Non-critical — fail silently
+            }
+        }
+
         return view('dashboard.index', compact(
             'user', 'todaySpend', 'todayCalories', 'todayIncome',
             'monthlySpend', 'monthlyIncome', 'monthlySavings',
             'spendingChart', 'categoryBreakdown',
             'streak', 'accounts', 'sinkingFunds', 'billsDue', 'recentActivities',
-            'totalBalance', 'totalAccountBalance', 'totalSavingsBalance'
+            'totalBalance', 'totalAccountBalance', 'totalSavingsBalance',
+            'healthData'
         ));
     }
 
@@ -302,12 +313,15 @@ class DashboardController extends Controller
 
         $todayCalories = $todayMeals->sum('calories');
 
-        $todayMacros = [
-            'calories' => $todayCalories,
-            'protein'  => 0,
-            'carbs'    => 0,
-            'fat'      => 0,
-        ];
+        $macros = $todayMeals->reduce(function ($carry, $meal) {
+            return [
+                'protein' => round($carry['protein'] + ($meal->protein_g ?? 0), 1),
+                'carbs'   => round($carry['carbs']   + ($meal->carbs_g   ?? 0), 1),
+                'fat'     => round($carry['fat']     + ($meal->fat_g     ?? 0), 1),
+            ];
+        }, ['protein' => 0, 'carbs' => 0, 'fat' => 0]);
+
+        $todayMacros = array_merge(['calories' => $todayCalories], $macros);
 
         // 7-day calorie average
         $last7 = Entry::where('user_id', $user->id)
@@ -411,6 +425,257 @@ class DashboardController extends Controller
         ));
     }
 
+    // ── Finance: Distribution ────────────────────────────────────────────────
+
+    public function distribution(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $accounts = $user->accounts()->where('is_active', true)->get();
+
+        // Group by account_type (from metadata)
+        $byType = [];
+        foreach ($accounts as $account) {
+            $type = $account->type ?? 'other';
+            if (!isset($byType[$type])) {
+                $byType[$type] = ['label' => $this->accountTypeLabel($type), 'balance' => 0, 'accounts' => []];
+            }
+            $byType[$type]['balance'] += $account->current_balance;
+            $byType[$type]['accounts'][] = $account;
+        }
+
+        $totalBalance = $accounts->sum('current_balance');
+
+        // This month spending by account
+        $monthStart = today()->startOfMonth();
+        $monthEnd = today()->endOfMonth();
+
+        $spendingByAccount = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereBetween('entry_time', [$monthStart, $monthEnd])
+            ->whereNotNull('source_fund_id')
+            ->selectRaw('source_fund_id, SUM(amount) as total, COUNT(*) as tx_count')
+            ->groupBy('source_fund_id')
+            ->get()
+            ->keyBy('source_fund_id');
+
+        // Per-account transaction counts and spending
+        foreach ($accounts as $account) {
+            $data = $spendingByAccount->get($account->id);
+            $account->month_spending = $data->total ?? 0;
+            $account->month_tx_count = $data->tx_count ?? 0;
+        }
+
+        // Spending by type
+        $spendingByType = [];
+        foreach ($accounts as $account) {
+            $type = $account->type ?? 'other';
+            $spendingByType[$type] = ($spendingByType[$type] ?? 0) + $account->month_spending;
+        }
+
+        return view('dashboard.distribution', compact('user', 'accounts', 'byType', 'totalBalance', 'spendingByType'));
+    }
+
+    // ── Finance: Cashflow ─────────────────────────────────────────────────
+
+    public function cashflow(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        // Monthly aggregates (last 6 months)
+        $months = [];
+        for ($i = 5; $i >= 0; $i--) {
+            $date = today()->subMonths($i);
+            $key = $date->format('Y-m');
+            $label = $date->translatedFormat('M Y');
+
+            $income = Entry::where('user_id', $user->id)->where('type', 'income')
+                ->whereNotNull('confirmed_at')->where('is_undone', false)
+                ->whereMonth('entry_time', $date->month)->whereYear('entry_time', $date->year)
+                ->sum('amount');
+
+            $expenses = Entry::where('user_id', $user->id)->where('type', 'expense')
+                ->whereNotNull('confirmed_at')->where('is_undone', false)
+                ->whereMonth('entry_time', $date->month)->whereYear('entry_time', $date->year)
+                ->sum('amount');
+
+            $savings = Entry::where('user_id', $user->id)
+                ->whereIn('type', ['saving', 'sinking_fund_deposit'])
+                ->whereNotNull('confirmed_at')->where('is_undone', false)
+                ->whereMonth('entry_time', $date->month)->whereYear('entry_time', $date->year)
+                ->sum('amount');
+
+            $months[$key] = [
+                'label' => $label,
+                'income' => (int) $income,
+                'expenses' => (int) $expenses,
+                'savings' => (int) $savings,
+                'net' => (int) ($income - $expenses),
+            ];
+        }
+
+        // Cumulative savings growth
+        $cumulativeSavings = [];
+        $runningTotal = 0;
+        foreach ($months as $key => $m) {
+            $runningTotal += $m['savings'];
+            $cumulativeSavings[$key] = $runningTotal;
+        }
+
+        // Current fund balances for savings total
+        $totalSavingsBalance = $user->funds()
+            ->whereIn('fund_type', ['savings', 'emergency_fund', 'sinking_fund'])
+            ->where('is_active', true)->sum('current_balance');
+
+        // Cashflow health score
+        $currentMonth = $months[today()->format('Y-m')] ?? end($months);
+        $healthScore = 0;
+        if ($currentMonth['income'] > 0) {
+            $savingsRate = max(0, $currentMonth['net']) / $currentMonth['income'];
+            $healthScore = min(100, (int) ($savingsRate * 200)); // 50% savings rate = 100
+        }
+
+        // Expense ratio
+        $expenseRatio = $currentMonth['income'] > 0
+            ? round(($currentMonth['expenses'] / $currentMonth['income']) * 100)
+            : 0;
+
+        // Best/worst month
+        $bestMonth = null;
+        $worstMonth = null;
+        foreach ($months as $key => $m) {
+            if ($bestMonth === null || $m['net'] > $months[$bestMonth]['net']) $bestMonth = $key;
+            if ($worstMonth === null || $m['net'] < $months[$worstMonth]['net']) $worstMonth = $key;
+        }
+
+        // Composite Financial Health Score (from FinancialHealthService)
+        $healthData = null;
+        try {
+            $healthData = app(\App\Services\FinancialHealthService::class)->getOrCalculate($user);
+        } catch (\Exception $e) { /* non-critical */ }
+
+        return view('dashboard.cashflow', compact(
+            'user', 'months', 'cumulativeSavings', 'totalSavingsBalance',
+            'healthScore', 'expenseRatio', 'bestMonth', 'worstMonth', 'healthData'
+        ));
+    }
+
+    // ── Finance: Timeline ─────────────────────────────────────────────────
+
+    public function timeline(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $date = $request->date('date') ?? today();
+        $tz = $user->timezone ?? 'Asia/Jakarta';
+
+        // All entries for this day
+        $entries = Entry::where('user_id', $user->id)
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereDate('entry_time', $date)
+            ->orderBy('entry_time')
+            ->get();
+
+        // Calculate running balance
+        $runningBalance = 0;
+        $totalIn = 0;
+        $totalOut = 0;
+        foreach ($entries as $entry) {
+            if (in_array($entry->type, ['income'])) {
+                $runningBalance += $entry->amount;
+                $totalIn += $entry->amount;
+            } elseif (in_array($entry->type, ['expense', 'bill_payment', 'debt_payment'])) {
+                $runningBalance -= $entry->amount;
+                $totalOut += $entry->amount;
+            } elseif (in_array($entry->type, ['saving', 'sinking_fund_deposit'])) {
+                $runningBalance -= $entry->amount; // outflow from spending
+                $totalOut += $entry->amount;
+            }
+            $entry->running_balance = $runningBalance;
+        }
+
+        // Monthly heatmap: spending per day for the current month
+        $monthStart = $date->copy()->startOfMonth();
+        $monthEnd = $date->copy()->endOfMonth();
+
+        $dailyTotals = Entry::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereNotNull('confirmed_at')->where('is_undone', false)
+            ->whereBetween('entry_time', [$monthStart, $monthEnd])
+            ->selectRaw('DATE(entry_time) as day, SUM(amount) as total')
+            ->groupBy('day')
+            ->pluck('total', 'day')
+            ->toArray();
+
+        $maxDaily = max(array_values($dailyTotals) ?: [0]);
+
+        return view('dashboard.timeline', compact(
+            'user', 'date', 'entries', 'totalIn', 'totalOut',
+            'dailyTotals', 'maxDaily', 'monthStart', 'monthEnd'
+        ));
+    }
+
+    // ── Finance: Debt Manager ─────────────────────────────────────────────
+
+    public function debtManager(Request $request): View
+    {
+        $user = $request->dashboard_user;
+
+        $debts = $user->debts()->active()->orderByDesc('interest_rate')->get();
+        $allDebts = $user->debts()->get(); // include paid off
+        $bills = $user->bills()->active()->orderBy('due_day')->get();
+
+        // Total metrics
+        $totalDebt = $debts->sum('remaining_balance');
+        $monthlyObligations = $debts->sum('monthly_installment') + $bills->sum('amount');
+        $totalOriginal = $debts->sum('total_amount');
+
+        // Payoff projections per debt
+        foreach ($debts as $debt) {
+            if ($debt->monthly_installment > 0) {
+                $monthsRemaining = ceil($debt->remaining_balance / $debt->monthly_installment);
+                $debt->months_remaining = $monthsRemaining;
+                $debt->projected_payoff = today()->addMonths($monthsRemaining)->format('M Y');
+                $debt->progress_pct = $debt->total_amount > 0
+                    ? round((1 - ($debt->remaining_balance / $debt->total_amount)) * 100)
+                    : 0;
+            } else {
+                $debt->months_remaining = null;
+                $debt->projected_payoff = null;
+                $debt->progress_pct = 0;
+            }
+        }
+
+        // Overall projected payoff (longest)
+        $maxMonths = $debts->max('months_remaining');
+        $overallPayoff = $maxMonths ? today()->addMonths($maxMonths)->format('M Y') : null;
+
+        // Bills this month status
+        $billsPaid = $bills->where('this_month_paid', true)->count();
+        $billsTotal = $bills->count();
+
+        // Debt composition by type
+        $debtByType = $debts->groupBy('debt_type')->map(fn($group) => $group->sum('remaining_balance'));
+
+        return view('dashboard.debts', compact(
+            'user', 'debts', 'bills', 'totalDebt', 'monthlyObligations',
+            'overallPayoff', 'billsPaid', 'billsTotal', 'debtByType'
+        ));
+    }
+
+    private function accountTypeLabel(string $type): string
+    {
+        return match ($type) {
+            'bank' => 'Bank',
+            'ewallet' => 'E-Wallet',
+            'emoney' => 'E-Money',
+            'cash' => 'Cash',
+            'credit_card' => 'Kartu Kredit',
+            default => 'Lainnya',
+        };
+    }
+
     // ── API: Entry Edit (with Telegram Undo conflict guard) ───────────────
 
     /**
@@ -493,7 +758,13 @@ class DashboardController extends Controller
 
     public function settings(Request $request): View
     {
-        return view('dashboard.settings', ['user' => $request->dashboard_user]);
+        $user           = $request->dashboard_user;
+        $userCategories = \App\Models\Category::forUser($user->id)->ordered()->get();
+
+        return view('dashboard.settings', [
+            'user'           => $user,
+            'userCategories' => $userCategories,
+        ]);
     }
 
     public function saveSettings(Request $request): RedirectResponse

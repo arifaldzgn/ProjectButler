@@ -4,6 +4,124 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.5.0] 2026-05-28 — Future features implementation (all phases)
+
+### Added
+
+**Phase 1 — Token Count Tracking (Admin)**
+- `OpenRouterClient::executeWithFallback()` now extracts `usage.prompt_tokens` / `usage.completion_tokens` from every OpenRouter response and returns them as `token_usage` in the result.
+- `AIService` exposes `getLastTokenUsage(): ?array` property, set after every `parseMessage()`, `generateSummary()`, `generateWeeklySummary()`, and `chat()` call.
+- `AiLogService::logParseCall()` and `logSummaryCall()` accept optional `?array $tokenUsage` to populate `token_count_input` / `token_count_output` columns (previously always NULL).
+- Admin `/admin/token-usage` page: per-user token breakdown, by-call-type breakdown, cost estimates (Gemini Flash pricing), period filter (7d/30d/all).
+- Route: `admin.token-usage.index`, nav entry added to admin sidebar.
+
+**Phase 2 — In-Telegram Calorie Editing**
+- Confirmed meal entries now show a `[🔢 Edit Kalori]` inline button (alongside undo/edit).
+- Tapping it stores a 5-minute cache key `cal_correction:{chatId}` with the entry ID.
+- Next message from user is intercepted by `MessageRouter::handleCalorieCorrection()` — accepts "350", "350 kcal", "350kcal" formats; updates `entries.calories` and calls `BehavioralMemoryService::observe()` for `food_calories` domain.
+- Invalid input: re-prompts the user and extends the cache TTL.
+
+**Phase 3A — Financial Distribution View (`/dashboard/distribution`)**
+- Doughnut chart: balance distribution by account type (Bank, E-wallet, E-money, Cash, Credit Card).
+- Horizontal bar chart: this-month spending by account type.
+- Per-account table with balance, % of total, transaction count.
+- Nav link added to dashboard layout.
+
+**Phase 3B — Cashflow Health + Growth Chart (`/dashboard/cashflow`)**
+- 6-month stacked bar (income vs expense) + net savings line overlay.
+- Cumulative savings growth line chart.
+- Health score gauge (0-100) using `min(100, (net/income) * 200)`.
+- Summary cards: expense ratio, total savings, best month.
+
+**Phase 3C — Daily Cashflow Timeline (`/dashboard/timeline`)**
+- Day-by-day transaction list with running balance computed in PHP.
+- Date navigation (← today →) with date picker.
+- Monthly calendar heatmap with click-to-navigate.
+- Color-coded entries: income green, expense red, transfer blue, savings purple.
+
+**Phase 3D — Debt Manager & Bill Tracker (`/dashboard/debts`)**
+- Debt progress cards sorted by interest rate (avalanche method).
+- Bill calendar grid with paid/unpaid status.
+- Summary cards: total debt, monthly obligations, estimated payoff date.
+- Debt composition doughnut chart.
+- Avalanche strategy tip card.
+
+**Phase 4A — Macro Tracking (protein/carbs/fat)**
+- Migration: `protein_g`, `carbs_g`, `fat_g` (nullable decimal 6,1) added to `entries` table.
+- `AIService::buildParserPrompt()` extended to extract `protein_g`, `carbs_g`, `fat_g` for `log_meal` and `log_meal_and_expense` intents.
+- `EntryService::createPendingEntry()` saves macro fields; `getTodayMacros()` returns summed totals.
+- `TelegramService::formatMealConfirmation()` shows macro line: "P:25g · C:45g · L:12g _(est)_"
+- Nutrition dashboard: macro doughnut chart + P/C/F progress bars with Chart.js.
+
+**Phase 4B — Weekly Summary Reports**
+- `WeeklySummaryService` sends 7-day aggregated summaries every Sunday at 20:00 WIB.
+- Includes: total spend vs weekly budget, category breakdown, week-over-week comparison, savings, calorie summary, streak.
+- `AIService::generateWeeklySummary()` uses a dedicated prompt optimized for weekly reflection tone.
+- Scheduler: `weeklyOn(0, '20:00')` in `routes/console.php`; manual command `butler:weekly-summary`.
+- Stored in `daily_summaries` table with `summary_type = 'weekly'`.
+
+**Phase 4C — Savings Goal Progress Notifications**
+- `FundService::creditFund()` now calls `checkGoalMilestone()` after every credit.
+- Milestones: 25%, 50%, 75%, 100% of `target_amount`.
+- `NotifySavingsGoalMilestone` job sends a Telegram notification per milestone, guarded by a 2-year Cache key to prevent re-sends.
+- No migration needed (existing `funds.target_amount` + `funds.current_balance`).
+
+**Phase 4D — Custom Categories**
+- Migration: `categories` table + `category_id` FK on `entries`.
+- `Category` model with `seedDefaults()` (9 default Indonesian categories seeded at onboarding completion).
+- `AIService::buildParserPrompt()` injects user's custom category names when available.
+- `EntryService::resolveCustomCategoryId()` fuzzy-matches AI category string to user's `Category` rows.
+- `CategoryController`: CRUD API — `POST/PATCH/DELETE /dashboard/categories/{id}`.
+- Settings page: visual category management UI with emoji icon + inline add/edit modal.
+
+**Phase 4E — Recurring Entry Templates**
+- Migration: `recurring_entries` table (description, amount, type, frequency, day_of_week, day_of_month, next_run_at).
+- `RecurringEntry` model with `advanceNextRun()` and frequency label helpers.
+- `RecurringEntryService::processRecurringEntries()`: checks `next_run_at <= now()`, creates confirmed entry, advances schedule, notifies user.
+- Scheduler: hourly. Manual command: `butler:recurring`.
+
+**Phase 4F — Personalized Reminder Timing**
+- `ReminderService::getOptimalReminderTime(User $user)`: analyses last 14 days of `entry_time` hours, builds hour histogram, finds low-activity gaps → suggests AM/PM reminder slots.
+- Persists histogram to `behavioral_memories` with domain `log_timing`.
+- `BehavioralMemory::DOMAIN_LOG_TIMING` constant added.
+
+**Phase 4G — AI-Generated Budget Suggestions**
+- `BudgetSuggestionService::sendSuggestion()`: aggregates 30-day spending, applies 50/30/20 rule, calls AI for narrative.
+- `AIService::generateBudgetSuggestion()` with a concise coaching prompt (under 120 words, IDR amounts, specific actionable tip).
+- Quick commands: `saran budget`, `budget suggestion`, `saran keuangan` — bypass AI parse, trigger suggestion directly.
+
+**Phase 4H — Receipt Photo Scanning**
+- Telegram webhook detects `photo` messages and dispatches `ProcessTelegramMessage` with `__photo:{fileId}|caption:{text}`.
+- `MessageRouter` intercepts `__photo:` messages in `handleReceiptPhoto()`.
+- `ReceiptScanService::extractFromTelegramPhoto()`: downloads photo via `getFile` API, sends base64 image to OpenRouter vision model (`generateVisionJson()`), extracts merchant/total/items/date.
+- Extracted data flows through standard `createPendingEntry()` → inline ✅/❌ confirmation buttons.
+- `OpenRouterClient::generateVisionJson()` added for multimodal (image + text) requests.
+
+**Phase 4I — Financial Health Score**
+- Migration: `financial_health_scores` table (score, components JSON, calculated_at).
+- `FinancialHealthModel` with band labels (Excellent/Good/Fair/Needs Work) and color codes.
+- `FinancialHealthService::calculate()`: 6 weighted factors — savings rate (25%), emergency fund coverage (20%), DTI ratio (20%), budget adherence (15%), bill consistency (10%), logging streak (10%).
+- `getOrCalculate()`: returns cached score if < 24h old, otherwise recalculates.
+- Dashboard index: health score card with component breakdown grid.
+- Cashflow page: detailed per-factor progress bars with contextual labels.
+
+### Changed
+- `DashboardController::settings()` now passes `$userCategories` to the view.
+- `DashboardController::index()` computes and passes `$healthData` (from `FinancialHealthService`).
+- `DashboardController::cashflow()` computes and passes `$healthData`.
+- `OnboardingController::done()` calls `Category::seedDefaults($user)` at onboarding completion.
+- `TelegramWebhookController` now handles `photo` message type alongside text.
+
+### Migrations added
+| File | Purpose |
+|---|---|
+| `2026_05_28_100001_add_macros_to_entries` | protein_g, carbs_g, fat_g on entries |
+| `2026_05_28_100002_create_categories_table` | categories + category_id FK on entries |
+| `2026_05_28_100003_create_recurring_entries_table` | recurring_entries |
+| `2026_05_28_100004_create_financial_health_scores_table` | financial_health_scores |
+
+---
+
 ## [v2.4.0] 2026-05-27 — Full improvement pass (all 12 items)
 
 ### Added

@@ -1,6 +1,6 @@
 # Architecture Notes — Project Butler
 
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ---
 
@@ -273,6 +273,41 @@ All use the same `Streak::updateStreak($type, $timezone)` method with 1-day grac
 | `streaks` | Consecutive logging streaks per user |
 | `mood_logs` | Daily mood + energy (keyed by telegram_chat_id + log_date) |
 | `quick_commands` | Keyword aliases → handler mapping (admin-editable, no deploy needed) |
+| `categories` | User-defined (and default) expense categories with emoji + color |
+| `recurring_entries` | Scheduled auto-entry templates (daily/weekly/monthly) |
+| `financial_health_scores` | Point-in-time composite score (0-100) per user with component breakdown |
+
+---
+
+## v2.5.0 Architecture Additions
+
+### Token Usage Tracking
+Every OpenRouter API call now returns `token_usage: { input, output }` alongside the result. `AIService` stores it in `lastTokenUsage` property. All callers pass it to `AiLogService`, which persists to `ai_logs.token_count_input/output`. Admin `/token-usage` page aggregates cost estimates.
+
+### In-Telegram Calorie Edit (Cache State Machine)
+Pattern: callback tap → `Cache::put("cal_correction:{chatId}", entryId, 5 min)` → next message intercepted before AI parse. This pattern can be reused for any short-lived 2-step interaction (e.g. receipt confirmation, rename a fund).
+
+### Custom Categories
+- `Category::seedDefaults($user)` called once at onboarding completion.
+- AI prompt includes user's custom category names (injected via `parseMessage(array $userCategories)`).
+- `EntryService::resolveCustomCategoryId()` fuzzy-matches the AI-returned text label to a DB row.
+- Entries have both a text `category` column (legacy, AI-returned) and a nullable `category_id` FK.
+
+### Recurring Entries
+`RecurringEntryService::processRecurringEntries()` runs hourly. It creates a pre-confirmed `Entry` (no ✅/❌ needed — auto-confirmed) and advances `next_run_at` using `RecurringEntry::advanceNextRun()`.
+
+### Receipt Photo Scanning (Vision AI)
+Flow: `photo` in webhook → `__photo:{fileId}|caption:...` sentinel string → `MessageRouter::handleReceiptPhoto()` → `ReceiptScanService::extractFromTelegramPhoto()` → `OpenRouterClient::generateVisionJson()` (multimodal) → `createPendingEntry()` → standard confirmation buttons.
+The sentinel prefix `__photo:` prevents the message from being parsed as a text command or passed to the AI text parser.
+
+### Financial Health Score
+Composite 0-100 score with 6 factors (weights: savings rate 25%, emergency fund 20%, DTI 20%, budget adherence 15%, bill consistency 10%, logging streak 10%). Persisted to `financial_health_scores` with a 24h cache via `getOrCalculate()`. Displayed on dashboard index (summary card) and cashflow page (detailed breakdown).
+
+### Weekly Summary
+`WeeklySummaryService` mirrors `DailySummaryService` but uses a weekly scope. Both store to `daily_summaries` table distinguished by `summary_type` ('daily' vs 'weekly'). AI prompt for weekly uses a reflective analytical tone with week-over-week delta.
+
+### Savings Goal Milestone Notifications
+`FundService::creditFund()` calls `checkGoalMilestone()` after every credit. Milestones (25/50/75/100%) are guarded by Cache keys `goal_milestone:{fundId}:{pct}` with 2-year TTL to prevent re-sends across restarts.
 
 ---
 
@@ -296,10 +331,7 @@ All use the same `Streak::updateStreak($type, $timezone)` method with 1-day grac
 
 These are deferred to avoid premature complexity:
 
-- **Macro tracking** (protein/carbs/fat) — requires AI estimation per food item; complex to validate
-- **Custom categories** — would require AI prompt changes + UI + migration
-- **Personalized reminder timing** — needs behavioral data accumulation; currently rule-based
-- **Weekly/monthly summary reports** — daily is sufficient until real users request it
-- **Transaction splitting** — across categories or accounts
-- **Export (CSV/PDF)** — dashboard history + filter covers most needs
-- **Native mobile app** — Telegram WebView is sufficient for v2
+- **Transaction splitting** — across categories or accounts (complex UX, no user demand yet)
+- **Partner/Household Mode** — multi-user shared budgets (requires auth overhaul)
+- **Native Telegram Mini App** — current WebView approach is sufficient
+- **Export (PDF)** — CSV export already exists via history page; PDF adds complexity for marginal gain

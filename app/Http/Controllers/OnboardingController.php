@@ -251,6 +251,9 @@ class OnboardingController extends Controller
         // Seed behavioral memory from onboarding data (queue: low)
         SeedBehavioralMemoryFromOnboarding::dispatch($user)->onQueue('low');
 
+        // Seed default categories (idempotent)
+        \App\Models\Category::seedDefaults($user);
+
         // Notify user in Telegram (queue: default)
         SendOnboardingCompleteNotification::dispatch($user)->onQueue('default');
 

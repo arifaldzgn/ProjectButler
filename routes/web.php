@@ -1,12 +1,16 @@
 <?php
 
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\MonitoringController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/monitoring', [MonitoringController::class, 'index'])->name('monitoring.index');
+
+// ── Portfolio: Architecture Diagram (public, no auth) ────────────────────
+Route::get('/portfolio/architecture', fn () => view('portfolio.architecture'))->name('portfolio.architecture');
 
 // ── Onboarding (signed URL entry, session-based continuation) ────────────
 Route::get('/setup/{telegram_id}', [OnboardingController::class, 'start'])
@@ -41,11 +45,18 @@ Route::middleware('dashboard.session')->group(function () {
     Route::get('/dashboard/spending',     [DashboardController::class, 'spending'])->name('dashboard.spending');
     Route::get('/dashboard/nutrition',    [DashboardController::class, 'nutrition'])->name('dashboard.nutrition');
     Route::get('/dashboard/insights',     [DashboardController::class, 'insights'])->name('dashboard.insights');
+    Route::get('/dashboard/distribution',  [DashboardController::class, 'distribution'])->name('dashboard.distribution');
+    Route::get('/dashboard/cashflow',      [DashboardController::class, 'cashflow'])->name('dashboard.cashflow');
+    Route::get('/dashboard/timeline',      [DashboardController::class, 'timeline'])->name('dashboard.timeline');
+    Route::get('/dashboard/debts',         [DashboardController::class, 'debtManager'])->name('dashboard.debts');
     Route::get('/dashboard/memory',       [DashboardController::class, 'memory'])->name('dashboard.memory');
     Route::delete('/dashboard/memory/{memory}', [DashboardController::class, 'deleteMemory'])->name('dashboard.memory.delete');
     Route::get('/dashboard/settings',     [DashboardController::class, 'settings'])->name('dashboard.settings');
     Route::post('/dashboard/settings',    [DashboardController::class, 'saveSettings'])->name('dashboard.settings.save');
     Route::patch('/dashboard/entries/{entry}', [DashboardController::class, 'updateEntry'])->name('dashboard.entry.update');
+    Route::post('/dashboard/categories',            [CategoryController::class, 'store'])->name('dashboard.categories.store');
+    Route::patch('/dashboard/categories/{category}', [CategoryController::class, 'update'])->name('dashboard.categories.update');
+    Route::delete('/dashboard/categories/{category}', [CategoryController::class, 'destroy'])->name('dashboard.categories.destroy');
 
     // Impersonation leave
     Route::post('/admin/leave-impersonate', [AdminController::class, 'leaveImpersonate'])->name('admin.impersonate.leave');
@@ -55,5 +66,6 @@ Route::middleware(['dashboard.session', 'is_admin'])->prefix('admin')->group(fun
     Route::get('/users',         [AdminController::class, 'index'])->name('admin.users.index');
     Route::get('/ai-logs',       [AdminController::class, 'aiLogs'])->name('admin.ai-logs.index');
     Route::get('/unrecognized',  [AdminController::class, 'unrecognized'])->name('admin.unrecognized.index');
+    Route::get('/token-usage',   [AdminController::class, 'tokenUsage'])->name('admin.token-usage.index');
     Route::post('/impersonate/{user}', [AdminController::class, 'impersonate'])->name('admin.impersonate');
 });
