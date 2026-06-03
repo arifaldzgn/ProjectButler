@@ -5,9 +5,15 @@ use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\MonitoringController;
+use App\Http\Controllers\ShortcutInstallController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/monitoring', [MonitoringController::class, 'index'])->name('monitoring.index');
+
+// ── Shortcut install page (public — code is the credential) ─────────────────
+Route::get('/shortcut/install/{code}', [ShortcutInstallController::class, 'show'])
+     ->name('shortcut.install')
+     ->where('code', '[A-Z0-9]{6}');
 
 // ── Portfolio: Architecture Diagram (public, no auth) ────────────────────
 Route::get('/portfolio/architecture', fn () => view('portfolio.architecture'))->name('portfolio.architecture');

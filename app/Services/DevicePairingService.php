@@ -89,23 +89,22 @@ class DevicePairingService
 
     /**
      * Build the inline keyboard for the pairing message.
+     * The "Setup" button always shows — it links to the web install page which
+     * has instructions and a copy-code button. If an iCloud Shortcut URL is
+     * configured, the install page also shows a direct "Install Shortcut" link.
      */
     public function buildPairingButtons(PairingCode $code): array
     {
-        $installUrl = config('butler.shortcut.install_url');
-
-        $buttons = [];
-
-        if ($installUrl) {
-            $buttons[] = ['text' => '📲 Instal Shortcut', 'url' => $installUrl];
-        }
-
-        $buttons[] = [
-            'text'          => '❌ Batalkan',
-            'callback_data' => "pair_device:cancel:{$code->id}",
+        return [
+            [
+                'text' => '📲 Setup Shortcut',
+                'url'  => url("/shortcut/install/{$code->code}"),
+            ],
+            [
+                'text'          => '❌ Batalkan',
+                'callback_data' => "pair_device:cancel:{$code->id}",
+            ],
         ];
-
-        return $buttons;
     }
 
     /**
