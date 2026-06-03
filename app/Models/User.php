@@ -6,11 +6,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Laravel\Sanctum\HasApiTokens;
 use App\Models\Account;
 
 class User extends Authenticatable
 {
-    use HasFactory;
+    use HasApiTokens, HasFactory;
 
     protected $fillable = [
         'is_admin',
@@ -47,6 +48,9 @@ class User extends Authenticatable
         'has_bills_setup',
         'has_income_set',
         'has_debt_declared',
+        // Shortcut API
+        'shortcut_notifications',
+        'shortcut_mode',
     ];
 
     protected $hidden = [];
@@ -70,7 +74,9 @@ class User extends Authenticatable
             'has_emergency_fund'    => 'boolean',
             'has_bills_setup'       => 'boolean',
             'has_income_set'        => 'boolean',
-            'has_debt_declared'     => 'boolean',
+            'has_debt_declared'          => 'boolean',
+            // Shortcut API
+            'shortcut_notifications'     => 'boolean',
         ];
     }
 
@@ -138,6 +144,33 @@ class User extends Authenticatable
     public function fundTransactions(): HasMany
     {
         return $this->hasMany(FundTransaction::class);
+    }
+
+    // Architecture v2 relationships ─────────────────────────────────────────
+
+    public function devices(): HasMany
+    {
+        return $this->hasMany(\App\Models\Device::class);
+    }
+
+    public function activeDevices(): HasMany
+    {
+        return $this->devices()->where('is_active', true);
+    }
+
+    public function pairingCodes(): HasMany
+    {
+        return $this->hasMany(\App\Models\PairingCode::class);
+    }
+
+    public function conversations(): HasMany
+    {
+        return $this->hasMany(\App\Models\Conversation::class);
+    }
+
+    public function dailyAnalytics(): HasMany
+    {
+        return $this->hasMany(\App\Models\DailyAnalytic::class);
     }
 
     // ── Helpers ──────────────────────────────────────────────────

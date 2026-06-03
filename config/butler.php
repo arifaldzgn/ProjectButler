@@ -67,4 +67,26 @@ return [
     */
     'undo_window_minutes' => (int) env('BUTLER_UNDO_WINDOW_MINUTES', 5),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Shortcut API
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for the public Shortcut API used by iPhone Shortcuts,
+    | Android HTTP clients, and other non-Telegram entry points.
+    |
+    | admin_secret  — Header value required to issue API tokens (POST /api/shortcut/token).
+    |                 Set SHORTCUT_ADMIN_SECRET in .env. Never commit this value.
+    | rate_limit    — Max requests per minute per authenticated user.
+    | sync_timeout  — Seconds to wait for an AI response in sync mode.
+    |
+    */
+    'shortcut' => [
+        'admin_secret'         => env('SHORTCUT_ADMIN_SECRET'),
+        'rate_limit'           => (int) env('SHORTCUT_RATE_LIMIT', 30),
+        'sync_timeout'         => (int) env('SHORTCUT_SYNC_TIMEOUT', 12),
+        'pairing_ttl_minutes'  => (int) env('SHORTCUT_PAIRING_TTL_MINUTES', 15),
+        'idempotency_ttl_seconds' => (int) env('SHORTCUT_IDEMPOTENCY_TTL', 600),
+    ],
+
 ];

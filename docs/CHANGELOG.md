@@ -4,6 +4,86 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [Unreleased] — Architecture v2 (2026-06-03)
+
+### Added
+
+#### Phase 1A — Device-Centric Authentication & Self-Service Pairing
+- `devices` table — tracks physical/logical devices per user with platform, last_used_at, is_active, metadata
+- `pairing_codes` table — one-time 6-character codes for self-service device onboarding (no admin required)
+- `Device` model with `revoke()`, `touchLastUsed()`, `forToken()` helpers
+- `PairingCode` model with `generateCode()`, `isUsable()`, `isClaimed()`, `isExpired()` helpers
+- `DeviceController` — list, rename, revoke, activity endpoints (`GET|PATCH|DELETE /api/devices`)
+- `PairingController` — request code (`POST /api/pair/request`) + claim code (`POST /api/pair/claim`)
+- `User::devices()`, `User::activeDevices()`, `User::pairingCodes()` relationships
+
+#### Phase 1B — Idempotency Support
+- `IdempotencyMiddleware` — `Idempotency-Key` header support with cache-backed deduplication
+  - Short-lived in-flight lock prevents concurrent duplicate requests
+  - Only caches 2xx responses (errors are not deduplicated)
+  - 10-minute default TTL (`SHORTCUT_IDEMPOTENCY_TTL`)
+  - Response headers: `X-Idempotency-Key`, `X-Idempotency-Replayed`
+
+#### Phase 1C — Structured Intent Support
+- `ShortcutMessageController` — accepts optional `intent` field in POST body
+  - Valid intents: `expense`, `income`, `task`, `note`, `journal`, `health`, `reminder`, `general_chat`
+- `ShortcutMessageService::process()` — accepts `intentHint` and `deviceId` parameters
+- `MessageContext::toTaggedMessage()` — encodes intent hint into the job tag format (`__shortcut:{id}|intent:{hint}|{message}`)
+- `ProcessTelegramMessage` — parses Format B tag (`__shortcut:{id}|intent:{hint}|{message}`)
+
+#### Phase 1D — Extension Points (Adapters & DTOs)
+- `ChannelAdapterInterface` — contract for future multi-channel delivery (`channel()`, `send()`, `supportsAsync()`)
+- `TelegramAdapter` — thin stub wrapping `TelegramService` (migration hook for Phase 2)
+- `ShortcutAdapter` — relays responses to Shortcut API callers via `ShortcutMessageService::relayResponse()`
+- `MessageContext` (readonly DTO) — immutable value object carrying user, message, channel, intent hint, device ID
+- `ResponsePayload` (readonly DTO) — channel-agnostic AI response with `pending()` and `failed()` factory methods
+
+#### Phase 1E — Conversation Tracking
+- `conversations` table — one thread per user/channel/channel_id, status: active|archived
+- `conversation_messages` table — immutable message turns (user|assistant|system roles)
+- `Conversation` model with `findOrStartFor()` helper
+- `ConversationMessage` model with `userTurn()` and `assistantTurn()` factory helpers
+- `ConversationService` — `recordUserTurn()`, `recordAssistantTurn()`, `getRecentHistory()`
+- `User::conversations()` relationship
+- `ProcessTelegramMessage` now records assistant turns after each successful response relay
+
+#### Phase 1F — Domain Events & Listeners
+- **Events**: `MessageReceived`, `IntentDetected`, `ExpenseRecorded`, `ReminderCreated`, `AiResponseGenerated`, `DeviceRegistered`, `DeviceRevoked`
+- **Listeners** (async, low queue):
+  - `LogMessageReceived` → records user turn in `conversation_messages`
+  - `UpdateDeviceLastUsed` → updates `devices.last_used_at`
+  - `RecordAnalyticsEvent` → increments `daily_analytics` counters
+- All listeners implement `ShouldQueue` — events never block the request path
+
+#### Phase 1G — Analytics Layer
+- `daily_analytics` table — one row per user/channel/day with request count, intent distribution, AI latency sum, error count
+- `DailyAnalytic` model with `avg_ai_latency_ms` computed attribute
+- `AnalyticsService::record()` — atomic upsert-based aggregation (safe with concurrent workers)
+- `AnalyticsService::getSummary()` — retrieve last N days of aggregates per user
+- `User::dailyAnalytics()` relationship
+
+#### Infrastructure
+- `ProcessTelegramMessage` now fires `MessageReceived` event and records analytics on every message
+- `TelegramService::getLastSentText()` / `clearLastSentText()` — enables response relay without changing `MessageRouter`'s void return type
+- `AppServiceProvider` — registers all event→listener mappings and uses configurable rate limit
+- New env vars: `SHORTCUT_PAIRING_TTL_MINUTES`, `SHORTCUT_IDEMPOTENCY_TTL`
+- New routes: `POST /api/pair/request`, `POST /api/pair/claim`, `GET|PATCH|DELETE /api/devices`, `GET /api/devices/{id}/activity`
+
+### Changed
+- `routes/api.php` — Device and Pairing routes added; Idempotency middleware added to Shortcut route group
+- `AppServiceProvider::boot()` — event listeners registered; rate limiter reads from config
+- `ShortcutMessageController` — now resolves `device_id` from current Sanctum token
+- `ShortcutMessageService::process()` — signature extended with `intentHint` and `deviceId`
+- `config/butler.php` — `shortcut` block extended with `pairing_ttl_minutes`, `idempotency_ttl_seconds`
+- `User` model — added `HasApiTokens` trait, new v2 relationships
+
+### Architecture Principles Applied
+- **Additive only** — no existing `MessageRouter` or `TelegramService` business logic was modified
+- `MessageRouter` remains the source of truth for all AI routing and domain logic
+- Channel adapters are extension points, not functional replacements (Phase 2 migration)
+- All new async work runs on the `low` queue — critical path (`high` queue) is unchanged
+
+---
 ## [v2.5.0] 2026-05-28 — Future features implementation (all phases)
 
 ### Added

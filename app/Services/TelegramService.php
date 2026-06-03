@@ -11,6 +11,14 @@ class TelegramService
     private string $baseUrl;
     private ?string $debugContext = null;
 
+    /**
+     * The last text successfully sent via sendMessage / sendWithRetry.
+     * Used by ProcessTelegramMessage to relay responses back to ShortcutAdapter
+     * without changing MessageRouter's void return type.
+     * Reset to null at the start of each handle() call via clearLastSentText().
+     */
+    private ?string $lastSentText = null;
+
     public function __construct()
     {
         $this->token = config('butler.telegram.bot_token');
@@ -20,6 +28,24 @@ class TelegramService
     public function setDebugContext(?string $context): void
     {
         $this->debugContext = $context;
+    }
+
+    /**
+     * Returns the last text sent via sendMessage() in this request lifecycle.
+     * Called by ProcessTelegramMessage after router->handle() to relay to Shortcut.
+     */
+    public function getLastSentText(): ?string
+    {
+        return $this->lastSentText;
+    }
+
+    /**
+     * Reset the captured last-sent text.
+     * Call this before processing each new message to avoid stale state.
+     */
+    public function clearLastSentText(): void
+    {
+        $this->lastSentText = null;
     }
 
     private function applyDebugContext(string &$text): void
@@ -769,8 +795,8 @@ class TelegramService
     {
         try {
             $response = Http::post("{$this->baseUrl}/sendMessage", [
-                'chat_id' => $chatId,
-                'text' => $text,
+                'chat_id'    => $chatId,
+                'text'       => $text,
                 'parse_mode' => $parseMode,
             ]);
 
@@ -787,11 +813,14 @@ class TelegramService
                 }
 
                 Log::error('Telegram sendMessage failed after retries', [
-                    'status' => $response->status(),
+                    'status'   => $response->status(),
                     'attempts' => $attempt,
                 ]);
                 return false;
             }
+
+            // ── Capture last sent text for Shortcut relay ────────────────
+            $this->lastSentText = $text;
 
             return true;
         } catch (\Exception $e) {
