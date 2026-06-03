@@ -59,7 +59,7 @@ class Device extends Model
      * Mark the device as used right now.
      * Called by ValidateShortcutRequest middleware on every authenticated API call.
      */
-    public function touch(string $column = 'updated_at'): bool
+    public function touchLastUsedAt(): bool
     {
         return $this->update(['last_used_at' => now()]);
     }

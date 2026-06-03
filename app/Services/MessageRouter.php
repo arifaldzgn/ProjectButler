@@ -10,6 +10,7 @@ use App\Models\Fund;
 use App\Models\MoodLog;
 use App\Models\User;
 use App\Services\BehavioralMemoryService;
+use App\Services\DevicePairingService;
 use App\Services\PolicyEngine;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +31,7 @@ class MessageRouter
     private PolicyEngine $policy;
     private BehavioralMemoryService $memory;
     private CommandSuggestionService $suggester;
+    private DevicePairingService $pairing;
 
     public function __construct(
         AIService $ai,
@@ -43,7 +45,8 @@ class MessageRouter
         DebtService $debts,
         PolicyEngine $policy,
         BehavioralMemoryService $memory,
-        CommandSuggestionService $suggester
+        CommandSuggestionService $suggester,
+        DevicePairingService $pairing
     ) {
         $this->ai         = $ai;
         $this->entries    = $entries;
@@ -57,6 +60,7 @@ class MessageRouter
         $this->policy     = $policy;
         $this->memory     = $memory;
         $this->suggester  = $suggester;
+        $this->pairing    = $pairing;
     }
 
     /**
@@ -219,6 +223,12 @@ class MessageRouter
             return;
         }
 
+        // ── Device pairing callbacks ──────────────────────────────────
+        if (str_starts_with($data, 'pair_device:')) {
+            $this->handlePairDeviceCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
         // ── Entry confirmation callbacks ────────────────────────────────
         $parts  = explode(':', $data, 2);
         $action = $parts[0] ?? '';
@@ -340,6 +350,16 @@ class MessageRouter
         }
         if (in_array($msg, ['/settings', 'settings', 'pengaturan', 'ubah profil', 'ganti pengaturan'])) {
             $this->sendSettingsLink($user, $chatId);
+            return true;
+        }
+
+        if (in_array($msg, ['/pair_iphone', '/pair', 'pair iphone', 'hubungkan iphone', 'pasang shortcut'])) {
+            $this->sendPairIphoneInstructions($user, $chatId);
+            return true;
+        }
+
+        if (in_array($msg, ['/my_devices', '/devices', 'perangkat saya', 'daftar perangkat'])) {
+            $this->sendDevicesList($user, $chatId);
             return true;
         }
         // Mood logging: "mood: good" / "mood: bagus, energi 4" / "mood good"
@@ -1072,6 +1092,115 @@ class MessageRouter
     // ════════════════════════════════════════════════════════════════════
     // RESPONSE BUILDERS
     // ════════════════════════════════════════════════════════════════════
+
+    // ════════════════════════════════════════════════════════════════════
+    // DEVICE PAIRING
+    // ════════════════════════════════════════════════════════════════════
+
+    private function sendPairIphoneInstructions(User $user, string $chatId): void
+    {
+        $code    = $this->pairing->generateCode($user);
+        $text    = $this->pairing->buildPairingMessage($code);
+        $buttons = $this->pairing->buildPairingButtons($code);
+
+        $this->telegram->sendMessageWithInlineKeyboard($chatId, $text, $buttons);
+    }
+
+    private function sendDevicesList(User $user, string $chatId): void
+    {
+        $text    = $this->pairing->buildDevicesMessage($user);
+        $buttons = $this->pairing->buildDevicesButtons($user);
+
+        if (empty($buttons)) {
+            $this->telegram->sendMessage($chatId, $text);
+            return;
+        }
+
+        // Each button on its own row so names don't get truncated
+        $rows = array_map(fn ($b) => [$b], $buttons);
+
+        $keyboard = ['inline_keyboard' => $rows];
+
+        try {
+            \Illuminate\Support\Facades\Http::post(
+                "https://api.telegram.org/bot" . config('butler.telegram.bot_token') . "/sendMessage",
+                [
+                    'chat_id'      => $chatId,
+                    'text'         => $text,
+                    'parse_mode'   => 'Markdown',
+                    'reply_markup' => json_encode($keyboard),
+                ]
+            );
+        } catch (\Exception $e) {
+            Log::error('sendDevicesList failed', ['message' => $e->getMessage()]);
+            $this->telegram->sendMessage($chatId, $text);
+        }
+    }
+
+    private function handlePairDeviceCallback(
+        User   $user,
+        string $chatId,
+        string $callbackQueryId,
+        string $data,
+        int    $messageId
+    ): void {
+        // pair_device:cancel:{pairingCodeId}
+        // pair_device:revoke:{deviceId}
+        // pair_device:new
+        $parts  = explode(':', $data);
+        $action = $parts[1] ?? '';
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        if ($action === 'cancel') {
+            $this->telegram->editMessage($chatId, $messageId, '❌ Pairing dibatalkan.');
+            return;
+        }
+
+        if ($action === 'revoke') {
+            $deviceId = (int) ($parts[2] ?? 0);
+            $success  = $this->pairing->revokeDevice($user, $deviceId);
+
+            if ($success) {
+                // Refresh the device list in-place
+                $newText    = $this->pairing->buildDevicesMessage($user);
+                $newButtons = $this->pairing->buildDevicesButtons($user);
+
+                if (empty($newButtons)) {
+                    $this->telegram->editMessage($chatId, $messageId, $newText);
+                    return;
+                }
+
+                $rows     = array_map(fn ($b) => [$b], $newButtons);
+                $keyboard = ['inline_keyboard' => $rows];
+
+                try {
+                    \Illuminate\Support\Facades\Http::post(
+                        "https://api.telegram.org/bot" . config('butler.telegram.bot_token') . "/editMessageText",
+                        [
+                            'chat_id'      => $chatId,
+                            'message_id'   => $messageId,
+                            'text'         => $newText,
+                            'parse_mode'   => 'Markdown',
+                            'reply_markup' => json_encode($keyboard),
+                        ]
+                    );
+                } catch (\Exception $e) {
+                    Log::error('handlePairDeviceCallback revoke edit failed', ['message' => $e->getMessage()]);
+                }
+            } else {
+                $this->telegram->answerCallbackQuery($callbackQueryId, 'Perangkat tidak ditemukan.');
+            }
+
+            return;
+        }
+
+        if ($action === 'new') {
+            $this->telegram->editMessage($chatId, $messageId, '');
+            $this->sendPairIphoneInstructions($user, $chatId);
+            return;
+        }
+    }
 
     private function sendHelp(User $user, string $chatId): void
     {

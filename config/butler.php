@@ -82,11 +82,15 @@ return [
     |
     */
     'shortcut' => [
-        'admin_secret'         => env('SHORTCUT_ADMIN_SECRET'),
-        'rate_limit'           => (int) env('SHORTCUT_RATE_LIMIT', 30),
-        'sync_timeout'         => (int) env('SHORTCUT_SYNC_TIMEOUT', 12),
-        'pairing_ttl_minutes'  => (int) env('SHORTCUT_PAIRING_TTL_MINUTES', 15),
+        'admin_secret'            => env('SHORTCUT_ADMIN_SECRET'),
+        'rate_limit'              => (int) env('SHORTCUT_RATE_LIMIT', 30),
+        'sync_timeout'            => (int) env('SHORTCUT_SYNC_TIMEOUT', 12),
+        'pairing_ttl_minutes'     => (int) env('SHORTCUT_PAIRING_TTL_MINUTES', 15),
         'idempotency_ttl_seconds' => (int) env('SHORTCUT_IDEMPOTENCY_TTL', 600),
+
+        // iCloud Shortcut share URL — set after you publish the Shortcut template.
+        // Leave blank to omit the "Install Shortcut" button from the /pair_iphone reply.
+        'install_url'             => env('SHORTCUT_INSTALL_URL'),
     ],
 
 ];
