@@ -1,59 +1,43 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Project Butler
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Project Butler is a personal AI assistant with a Telegram-first UX, extended to support iPhone Shortcuts, Android, web, and desktop clients via a secure REST API. It acts as an intelligent companion for financial tracking, nutrition logging, habit building, and general assistance.
 
-## About Laravel
+## Architecture
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Project Butler uses a centralized routing architecture where all messages—whether from Telegram, iOS Shortcuts, Android, or the Web—are processed through a unified `MessageRouter`.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- **Device-Centric Authentication:** Clients authenticate via per-device Sanctum tokens using a self-service pairing flow (no server-side admin required).
+- **Idempotency Support:** Robust retry handling to prevent duplicate records on flaky mobile connections.
+- **Queue System:** High-priority queue for immediate message parsing and responses; low-priority queue for behavioral memory learning, analytics, and notification dispatch.
+- **Behavioral Memory (Soul Engine):** Learns user habits (e.g., typical calorie counts, recurring bills) over time based on confidence thresholds and implicit/explicit user confirmation.
+- **Smart Fallback Engine:** Handles unrecognized commands using a deterministic suggestion engine before falling back to LLM-driven categorization.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+For full architectural details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Learning Laravel
+## Features
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+- **Financial Management:**
+  - Multi-account tracking (Bank, E-wallet, Cash, Credit Card).
+  - Expense and income logging via natural language and receipt photo scanning.
+  - Sinking funds and savings goals with automated milestone notifications.
+  - Dashboard with financial health scoring, debt avalanche strategy planning, and cashflow charts.
+- **Health & Nutrition:**
+  - Calorie and macro (protein/carbs/fat) tracking based on natural language input.
+  - Tailored goal modes (Bulking / Maintenance / Cutting).
+- **Habits & Tracking:**
+  - Behavioral memory that adapts to user routines.
+  - Streaks and personalized recurring reminders.
+  - Mood logging and daily/weekly AI-generated summary reports.
+- **Dashboards & Webview:**
+  - Premium mobile-responsive dashboard (Light/Dark mode) accessible via signed URLs from Telegram.
+  - Visual insights and data export capabilities.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## Recent Updates
 
-## Laravel Sponsors
+Project Butler has recently transitioned to **Architecture v2**, which introduces:
+- Multi-client support via Sanctum-based device pairing.
+- Idempotency middleware and structured intent support.
+- Deep integration of AI for parsing multi-modal inputs (e.g., receipt photos).
+- Rich administrative logging for unrecognized messages and API token usage.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
-
-### Premium Partners
-
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
-
-## Contributing
-
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
-
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+For a full history of changes, see [docs/CHANGELOG.md](docs/CHANGELOG.md).
