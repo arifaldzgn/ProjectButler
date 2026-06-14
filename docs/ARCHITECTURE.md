@@ -1,7 +1,7 @@
 # Project Butler — Architecture Reference
 
 > Living document. Updated with every architecture revision.
-> Current version: **v2 (2026-06-03)**
+> Current version: **v2.6.1 (2026-06-14)**
 
 ---
 
@@ -65,6 +65,7 @@ Sanctum tokens issued through a self-service pairing flow.
          │  DebtService            │
          │  ReminderService        │
          │  StreakService           │
+         │  FinanceReviewService   │  ← v2.6: self-contained review
          └────────────┬────────────┘
                       │
          ┌────────────▼────────────┐
@@ -152,6 +153,46 @@ daily_analytics         — aggregated per-user/channel/day metrics
   total_ai_latency_ms, errors_count
 ```
 
+### v2.6.1 Additions (no new tables)
+All changes are behavioral / in-memory:
+- `behavioral_memories` gains a new domain `transfer_source` (`DOMAIN_TRANSFER_SOURCE`)  
+  — stores which fund the user habitually uses as a transfer source (subject = `default`).  
+  Confidence builds over repeated picks; ≥ 0.50 is auto-applied on ambiguous transfers.
+
+### v2.6 Additions
+```
+finance_review_profiles  — one review profile per user ("Sanggup Ga?")
+  id, user_id (unique)
+
+  -- Step 1: Profil & Pendapatan
+  domisili, domisili_key, gaji_bersih
+
+  -- Step 2: Tempat Tinggal
+  housing_status (enum: kpr|sewa|kontrak|ortu|lainnya), housing_cost
+
+  -- Step 3: Kebutuhan Makan
+  cook_percentage, food_base_monthly,
+  hangout_frequency (enum: jarang|1-2x|3-4x|setiap-hari)
+
+  -- Step 4: Transportasi
+  transport_type, commute_km_daily, transport_monthly
+
+  -- Step 5: Tagihan & Langganan (JSON snapshots — preserved across re-visits)
+  bills_snapshot    [{id, name, amount, included}]
+  recurring_snapshot[{id, name, amount, included}]
+
+  -- Step 6: Tanggungan & Gaya Hidup
+  tanggungan_count, family_remittance, rokok_monthly,
+  gym_monthly, asuransi_monthly, mudik_annual
+
+  -- Step 7: Cicilan & Hutang
+  debts_snapshot [{id, name, amount, included}]
+
+  -- Progress & cached output
+  last_completed_step (0–7), review_completed_at,
+  ai_insights (text, cached), insights_generated_at
+```
+
 ---
 
 ## API Reference (v2)
@@ -179,6 +220,16 @@ daily_analytics         — aggregated per-user/channel/day metrics
 | `DELETE` | `/api/devices/{id}` | Revoke device |
 | `GET` | `/api/devices/{id}/activity` | Device last_used_at + metadata |
 
+### Dashboard — Finance Review (session auth, `dashboard.session` middleware)
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/dashboard/finance-review` | Redirect to current wizard step or result |
+| `GET` | `/dashboard/finance-review/step/{1-7}` | Show wizard step |
+| `POST` | `/dashboard/finance-review/step/{1-7}` | Save step, advance to next |
+| `GET` | `/dashboard/finance-review/result` | "Sanggup Ga?" result page |
+| `POST` | `/dashboard/finance-review/recalculate` | Refresh AI insights only |
+| `POST` | `/dashboard/finance-review/reset` | Delete profile, restart wizard |
+
 ### Idempotency
 Send `Idempotency-Key: <uuid>` header to deduplicate retried requests.
 TTL: 10 minutes (configurable via `SHORTCUT_IDEMPOTENCY_TTL`).
@@ -202,6 +253,51 @@ IntentDetected         → (extensible, no listener yet)
 
 All listeners run async on the `low` queue — they never block the `high` queue
 that handles message routing.
+
+---
+
+## AI Parser Grounding (v2.6.1)
+
+`MessageRouter::handle()` builds a per-user context object before calling `AIService::parseMessage()`:
+
+```
+buildParserContext(User)
+  └─ funds[]            → user's real fund/account names (max 15)
+  └─ learned_foods{}    → BehavioralMemory food_calories rows (confidence ≥ 0.50)
+  └─ mode               → 'finance' | 'calorie' | 'both'
+```
+
+The AI is told:
+- **Only use names from `funds[]`** for `fund_name`, `source_fund`, `target_fund` — never invent.
+- **Calorie values in `learned_foods`** are authoritative (`is_calorie_estimated=false`); skip re-estimation.
+- **Mode steering** — finance-only users never see `log_meal`; calorie-only users never see money intents.
+
+---
+
+## Transfer Direction Flow (v2.6.1)
+
+Every `transfer_fund` parse result carries a `direction` field:
+
+| Value | Meaning | Cues (Indonesian) | Effect |
+|---|---|---|---|
+| `out` | Money left a wallet | "transfer pake", "bayar pake", "kirim dari" | Debit source only |
+| `in` | Money arrived in an account | "terima", "masuk ke", "diterima" | Credit target only |
+| `internal` | Between own accounts | "pindahkan dari X ke Y" or ambiguous | Debit source + credit target |
+
+**Source resolution for `internal` when source is unknown:**
+
+1. Check `behavioral_memories` for `domain=transfer_source`, `subject=default` (confidence ≥ 0.50).
+2. If not yet learned → send inline keyboard of all user funds (`xfer_pick:{entryId}:source:{fundId}`).
+3. User's pick is observed into `transfer_source` memory; next transfer won't ask.
+4. The main spending account (`spending_budget`) is **never silently assumed** as transfer source.
+
+**Callback prefixes used by transfer flow:**
+
+| Prefix | Handler |
+|---|---|
+| `xfer_pick:{entryId}:{role}:{fundId}` | `handleTransferPickCallback()` — completes pending transfer after user selects account |
+| `acct_sel:{entryId}:{fundId}` | existing account selection (expenses) |
+| `fund_src:{entryId}:{fundId}` | existing fund source picker (savings deposits) |
 
 ---
 

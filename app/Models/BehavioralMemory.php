@@ -46,6 +46,7 @@ class BehavioralMemory extends Model
     public const DOMAIN_CATEGORY_ACCOUNT  = 'category_account';
     public const DOMAIN_SPEND_RHYTHM      = 'spend_rhythm';
     public const DOMAIN_LOG_TIMING        = 'log_timing';     // tracks typical logging hours
+    public const DOMAIN_TRANSFER_SOURCE   = 'transfer_source'; // the account a user usually sends transfers FROM
 
     // Confidence thresholds
     public const CONF_SUGGEST_MIN   = 0.50;

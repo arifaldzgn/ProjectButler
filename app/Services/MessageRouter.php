@@ -119,9 +119,13 @@ class MessageRouter
             ->pluck('name')
             ->toArray();
 
+        // Ground the parser in this user's real data: actual fund names,
+        // previously-corrected food calories, and active tracking mode.
+        $userContext = $this->buildParserContext($user);
+
         $startTime = microtime(true);
         try {
-            $parsed = $this->ai->parseMessage($message, $user->name, $userCategoryNames);
+            $parsed = $this->ai->parseMessage($message, $user->name, $userCategoryNames, $userContext);
             $latencyMs = $parsed['_latency_ms'] ?? (int) ((microtime(true) - $startTime) * 1000);
 
             if (!$parsed) {
@@ -156,7 +160,7 @@ class MessageRouter
         $confStr = number_format($confidence, 2);
         $latency = $parsed['_latency_ms'] ?? $latencyMs;
         $modelUsed = $parsed['_model_used'] ?? 'unknown';
-        $debugMsg = "🤖 *AI Debug*\nModel: `{$modelUsed}`\nIntent: `{$intent}`\nConf: `{$confStr}`\nLatency: `{$latency}ms`";
+        $debugMsg = "🤖 *AI Debug*\nInput: `{$message}`\nModel: `{$modelUsed}`\nIntent: `{$intent}`\nConf: `{$confStr}`\nLatency: `{$latency}ms`";
         $this->telegram->setDebugContext($debugMsg);
 
         // Loggable entry intents (including dual log)
@@ -176,6 +180,7 @@ class MessageRouter
             'query_summary' => $this->sendQuickSummary($user, $chatId),
             'query_spending' => $this->handleQuerySpending($user, $chatId, $parsed),
             'set_reminder' => $this->handleSetReminder($user, $chatId, $parsed),
+            'transfer_fund' => $this->handleTransfer($user, $chatId, $message, $parsed, $confidence),
             'unknown' => $this->handleUnknownIntent($user, $chatId, $message, $parsed, $confidence),
             default   => $this->telegram->sendMessage($chatId, $this->ai->chat($message)),
         };
@@ -202,6 +207,12 @@ class MessageRouter
         // ── v2.1: Account selection (needs_clarification mode) ──────────
         if (str_starts_with($data, 'acct_sel:')) {
             $this->handleAccountSelectionCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── v2.6.1: Transfer account pick (source/target clarification) ──
+        if (str_starts_with($data, 'xfer_pick:')) {
+            $this->handleTransferPickCallback($user, $chatId, $callbackQueryId, $data, $messageId);
             return;
         }
 
@@ -453,9 +464,12 @@ class MessageRouter
             );
 
             if ($interactionMode === PolicyEngine::MODE_NEEDS_CLARIFICATION) {
-                // Show account picker inline keyboard — do NOT auto-confirm
-                $this->askAccountSelection($chatId, $entry->id, $user);
-                return;
+                // High-confidence messages skip clarification and fall through to default fund
+                if ($confidence < 0.90) {
+                    $this->askAccountSelection($chatId, $entry->id, $user);
+                    return;
+                }
+                $parsed['deducted_from'] = $user->getDefaultSpendingFund()?->name ?? 'Akun Utama';
             }
 
             if ($interactionMode === PolicyEngine::MODE_SOFT_CONFIRMATION) {
@@ -807,25 +821,33 @@ class MessageRouter
                     break;
 
                 case 'transfer':
-                    $sourceName = $metadata['source_fund'] ?? null;
-                    $targetName = $metadata['target_fund'] ?? null;
-                    
-                    $sourceFund = null;
-                    if ($sourceName) {
-                        $sourceFund = $this->funds->findFundByName($user, $sourceName);
-                    }
-                    if (!$sourceFund) {
-                        $sourceFund = \App\Models\Fund::forUser($user->id)->where('fund_type', 'savings')->first();
-                    }
-                    
-                    $targetFund = null;
-                    if ($targetName) {
-                        $targetFund = $this->funds->findFundByName($user, $targetName);
-                    }
-                    
-                    if ($sourceFund && $targetFund) {
-                        $this->funds->debitFund($sourceFund, $entry->amount, $entry->id, "Transfer ke {$targetFund->name}");
-                        $this->funds->creditFund($targetFund, $entry->amount, $entry->id, "Transfer dari {$sourceFund->name}");
+                    $direction = $metadata['direction'] ?? 'internal';
+
+                    // Prefer resolved IDs (set when the user picked an account); fall
+                    // back to name lookup. NEVER silently substitute a default account —
+                    // an unresolved source/target means nothing moves (handleTransfer
+                    // is responsible for asking before we reach this point).
+                    $sourceFund = $entry->source_fund_id
+                        ? \App\Models\Fund::find($entry->source_fund_id)
+                        : (!empty($metadata['source_fund']) ? $this->funds->findFundByName($user, $metadata['source_fund']) : null);
+
+                    $targetFund = !empty($metadata['target_fund_id'])
+                        ? \App\Models\Fund::find($metadata['target_fund_id'])
+                        : (!empty($metadata['target_fund']) ? $this->funds->findFundByName($user, $metadata['target_fund']) : null);
+
+                    if ($direction === 'in') {
+                        if ($targetFund) {
+                            $this->funds->creditFund($targetFund, $entry->amount, $entry->id, 'Transfer masuk');
+                        }
+                    } elseif ($direction === 'out') {
+                        if ($sourceFund) {
+                            $this->funds->debitFund($sourceFund, $entry->amount, $entry->id, 'Transfer keluar');
+                        }
+                    } else { // internal
+                        if ($sourceFund && $targetFund && $sourceFund->id !== $targetFund->id) {
+                            $this->funds->debitFund($sourceFund, $entry->amount, $entry->id, "Transfer ke {$targetFund->name}");
+                            $this->funds->creditFund($targetFund, $entry->amount, $entry->id, "Transfer dari {$sourceFund->name}");
+                        }
                     }
                     break;
             }
@@ -1087,6 +1109,226 @@ class MessageRouter
         } catch (\Exception $e) {
             $this->telegram->sendMessage($chatId, 'Gagal set pengingat. Coba lagi ya!');
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // FUND TRANSFER (direction-aware: in / out / internal)
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Handle a money transfer. Source and target are always the user's own
+     * money-holding funds (accounts/wallets/buckets). Direction determines
+     * which legs move:
+     *   - in       → money received: credit target only
+     *   - out      → money sent out:  debit source only
+     *   - internal → between own funds: debit source + credit target
+     *
+     * The source account is never silently assumed. If it isn't stated, we
+     * consult the learned "transfer_source" memory; if that's still unknown,
+     * we ask the user and remember their answer for next time.
+     */
+    private function handleTransfer(User $user, string $chatId, string $rawMessage, array $parsed, float $confidence): void
+    {
+        $amount = (int) ($parsed['amount'] ?? 0);
+        if ($amount <= 0) {
+            $this->telegram->sendMessage($chatId, "Nominal transfernya berapa? Contoh: `transfer 100k ke BCA`");
+            return;
+        }
+
+        $direction  = in_array($parsed['direction'] ?? '', ['in', 'out', 'internal'], true)
+            ? $parsed['direction']
+            : 'internal';
+        $sourceFund = !empty($parsed['source_fund']) ? $this->funds->findFundByName($user, $parsed['source_fund']) : null;
+        $targetFund = !empty($parsed['target_fund']) ? $this->funds->findFundByName($user, $parsed['target_fund']) : null;
+
+        // ── Incoming: money received into one of the user's accounts ──────
+        if ($direction === 'in') {
+            if (!$targetFund) {
+                $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'in', null, null);
+                $this->askTransferAccount($user, $chatId, $entry->id, 'tgt', '📥 Diterima ke akun mana?');
+                return;
+            }
+            $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'in', null, $targetFund);
+            $this->finishTransfer($user, $chatId, $entry, $confidence);
+            return;
+        }
+
+        // ── Outgoing: money sent out from one of the user's wallets ───────
+        if ($direction === 'out') {
+            $sourceFund = $sourceFund ?? $this->resolveLearnedTransferSource($user);
+            if (!$sourceFund) {
+                $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'out', null, null);
+                $this->askTransferAccount($user, $chatId, $entry->id, 'src', '📤 Transfer ini dari akun mana?');
+                return;
+            }
+            $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'out', $sourceFund, null);
+            $this->learnTransferSource($user, $sourceFund);
+            $this->finishTransfer($user, $chatId, $entry, $confidence);
+            return;
+        }
+
+        // ── Internal: between the user's own accounts/buckets ─────────────
+        if (!$targetFund) {
+            $this->telegram->sendMessage(
+                $chatId,
+                "Mau dipindah ke mana? Contoh: `transfer 100k ke BCA` atau `pindahin 200k ke Dana Darurat`"
+            );
+            return;
+        }
+
+        if (!$sourceFund) {
+            $sourceFund = $this->resolveLearnedTransferSource($user, $targetFund);
+        }
+
+        if (!$sourceFund) {
+            // Don't assume the main account — ask, and learn the answer.
+            $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'internal', null, $targetFund);
+            $this->askTransferAccount($user, $chatId, $entry->id, 'src', "📤 Dari akun mana ke *{$targetFund->name}*?", $targetFund->id);
+            return;
+        }
+
+        if ($sourceFund->id === $targetFund->id) {
+            $this->telegram->sendMessage($chatId, "Akun asal dan tujuan sama. Sebut akun yang berbeda ya!");
+            return;
+        }
+
+        $entry = $this->createTransferEntry($user, $rawMessage, $parsed, 'internal', $sourceFund, $targetFund);
+        $this->learnTransferSource($user, $sourceFund);
+        $this->finishTransfer($user, $chatId, $entry, $confidence);
+    }
+
+    /**
+     * Create the pending transfer entry with resolved fund references.
+     */
+    private function createTransferEntry(User $user, string $rawMessage, array $parsed, string $direction, ?Fund $source, ?Fund $target): Entry
+    {
+        $payload = [
+            'intent'      => 'transfer_fund',
+            'confidence'  => $parsed['confidence'] ?? 0.9,
+            'amount'      => (int) ($parsed['amount'] ?? 0),
+            'direction'   => $direction,
+            'source_fund' => $source?->name ?? ($parsed['source_fund'] ?? null),
+            'target_fund' => $target?->name ?? ($parsed['target_fund'] ?? null),
+            'entry_time'  => $parsed['entry_time'] ?? null,
+        ];
+        if ($source) $payload['source_fund_id'] = $source->id;
+        if ($target) $payload['target_fund_id'] = $target->id;
+
+        return $this->entries->createPendingEntry($user, $payload, $rawMessage);
+    }
+
+    /**
+     * Confirm a fully-resolved transfer: immediately for high confidence,
+     * otherwise behind a confirmation keyboard.
+     */
+    private function finishTransfer(User $user, string $chatId, Entry $entry, float $confidence): void
+    {
+        if ($confidence >= 0.85) {
+            $this->confirmAndSendWithUndo($user, $chatId, $entry);
+            return;
+        }
+
+        $parsed  = $this->entryToParsedArray($entry);
+        $text    = $this->telegram->formatTransferConfirmation($parsed, $confidence);
+        $buttons = $this->telegram->buildConfirmationButtons($entry->id);
+        $this->telegram->sendMessageWithInlineKeyboard($chatId, $text, $buttons);
+    }
+
+    /**
+     * Look up the account the user usually transfers FROM (learned over time).
+     * Returns null when nothing confident enough is known — caller should ask.
+     */
+    private function resolveLearnedTransferSource(User $user, ?Fund $exclude = null): ?Fund
+    {
+        $mem = $this->memory->resolve($user->id, \App\Models\BehavioralMemory::DOMAIN_TRANSFER_SOURCE, 'default');
+        $fundId = $mem?->value['account_id'] ?? null;
+        if (!$fundId) {
+            return null;
+        }
+
+        $fund = Fund::forUser($user->id)->active()->find($fundId);
+        if ($fund && $exclude && $fund->id === $exclude->id) {
+            return null; // a fund can't be its own source
+        }
+        return $fund;
+    }
+
+    /**
+     * Strengthen the learned "which account do I transfer from" memory.
+     */
+    private function learnTransferSource(User $user, Fund $source): void
+    {
+        $this->memory->observe($user->id, \App\Models\BehavioralMemory::DOMAIN_TRANSFER_SOURCE, 'default', [
+            'account_id'   => $source->id,
+            'account_name' => $source->name,
+        ]);
+    }
+
+    /**
+     * Ask the user to pick the source/target account for a pending transfer.
+     * Only the user's real money-holding funds are offered.
+     */
+    private function askTransferAccount(User $user, string $chatId, int $entryId, string $role, string $prompt, ?int $excludeFundId = null): void
+    {
+        $funds = $this->funds->getFundsForUser($user);
+        if ($excludeFundId) {
+            $funds = $funds->where('id', '!=', $excludeFundId);
+        }
+
+        if ($funds->isEmpty()) {
+            $this->telegram->sendMessage($chatId, 'Belum ada akun/dompet tersimpan. Tambah dulu lewat dashboard ya.');
+            return;
+        }
+
+        $accounts = $funds->map(fn ($f) => ['id' => $f->id, 'name' => $f->name])->values()->toArray();
+        $this->telegram->sendTransferAccountKeyboard($chatId, $entryId, $role, $accounts, $prompt);
+    }
+
+    /**
+     * Handle the account pick for a pending transfer.
+     * Format: xfer_pick:{entryId}:{role(src|tgt)}:{fundId}
+     */
+    private function handleTransferPickCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        $parts   = explode(':', $data);
+        $entryId = (int) ($parts[1] ?? 0);
+        $role    = $parts[2] ?? '';
+        $fundId  = (int) ($parts[3] ?? 0);
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+
+        $entry = Entry::forUser($user->id)->pending()->where('type', 'transfer')->find($entryId);
+        $fund  = $fundId ? Fund::forUser($user->id)->find($fundId) : null;
+
+        if (!$entry || !$fund) {
+            $this->telegram->editMessage($chatId, $messageId, 'Transfer tidak ditemukan atau sudah diproses.');
+            return;
+        }
+
+        $metadata = $entry->metadata ?? [];
+
+        if ($role === 'src') {
+            $entry->update(['source_fund_id' => $fund->id, 'source_fund_confirmed' => true]);
+            $metadata['source_fund'] = $fund->name;
+            $entry->update(['metadata' => $metadata]);
+            $this->learnTransferSource($user, $fund);
+        } elseif ($role === 'tgt') {
+            $metadata['target_fund']    = $fund->name;
+            $metadata['target_fund_id'] = $fund->id;
+            $entry->update(['metadata' => $metadata]);
+        }
+
+        // Guard against a self-transfer once both legs are known.
+        $srcId = $entry->fresh()->source_fund_id;
+        $tgtId = ($entry->fresh()->metadata['target_fund_id'] ?? null);
+        if ($srcId && $tgtId && (int) $srcId === (int) $tgtId) {
+            $this->entries->cancelEntry($entry);
+            $this->telegram->editMessage($chatId, $messageId, 'Akun asal dan tujuan sama — transfer dibatalkan.');
+            return;
+        }
+
+        $this->telegram->editMessage($chatId, $messageId, "Oke, pakai *{$fund->name}*.");
+        $this->confirmAndSendWithUndo($user, $chatId, $entry->fresh());
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1490,6 +1732,45 @@ class MessageRouter
     // HELPERS
     // ════════════════════════════════════════════════════════════════════
 
+    /**
+     * Build grounding context for the AI parser: the user's real fund names,
+     * previously-corrected food calories (from behavioral memory), and the
+     * active tracking mode. Keeps extraction concrete instead of guessed.
+     */
+    private function buildParserContext(User $user): array
+    {
+        $funds = $this->funds->getFundsForUser($user)
+            ->pluck('name')
+            ->filter()
+            ->take(15)
+            ->values()
+            ->toArray();
+
+        $learnedFoods = [];
+        if ($user->isCalorieMode()) {
+            $parserCtx = $this->memory->getParserContext($user->id);
+            foreach ($parserCtx['food_calories'] ?? [] as $row) {
+                $subject  = $row['subject'] ?? null;
+                $calories = $row['value']['calories'] ?? null;
+                if ($subject && $calories) {
+                    $learnedFoods[$subject] = (int) $calories;
+                }
+            }
+        }
+
+        $mode = match (true) {
+            $user->isFinanceMode() && $user->isCalorieMode() => 'both',
+            $user->isCalorieMode()                           => 'calorie',
+            default                                          => 'finance',
+        };
+
+        return [
+            'funds'         => $funds,
+            'learned_foods' => $learnedFoods,
+            'mode'          => $mode,
+        ];
+    }
+
     private function entryToParsedArray(Entry $entry): array
     {
         return match ($entry->type) {
@@ -1500,6 +1781,12 @@ class MessageRouter
             'bill_payment'         => ['amount' => $entry->amount, 'bill_name' => $entry->merchant ?? $entry->note],
             'debt_payment'         => ['amount' => $entry->amount, 'debt_name' => $entry->note],
             'sinking_fund_deposit' => ['amount' => $entry->amount, 'fund_name' => $entry->note],
+            'transfer'             => [
+                'amount'      => $entry->amount,
+                'direction'   => $entry->metadata['direction'] ?? 'internal',
+                'source_fund' => $entry->sourceFund?->name ?? ($entry->metadata['source_fund'] ?? null),
+                'target_fund' => $entry->metadata['target_fund'] ?? null,
+            ],
             default                => [],
         };
     }
@@ -1779,7 +2066,7 @@ class MessageRouter
         // Map to standard parsed format and create pending entry
         $parsed = $scanner->mapToEntryParsed($receiptData);
         $rawMessage = $caption ?: "Struk {$receiptData['merchant']}";
-        $entry  = $this->entryService->createPendingEntry($user, $parsed, $rawMessage);
+        $entry  = $this->entries->createPendingEntry($user, $parsed, $rawMessage);
 
         // Show confirmation with receipt details
         $amountF    = 'Rp ' . number_format($entry->amount ?? 0, 0, ',', '.');

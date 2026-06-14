@@ -45,8 +45,10 @@
 @else
 
 {{-- Charts row --}}
-<div class="animate-in" style="animation-delay:.1s;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+<style>
     @media (max-width:640px) { .chart-row { grid-template-columns:1fr!important; } }
+</style>
+<div class="animate-in chart-row" style="animation-delay:.1s;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
     {{-- Balance Distribution (doughnut) --}}
     <div class="card">
         <div class="card-title">Distribusi Saldo</div>
@@ -138,10 +140,10 @@
 @section('scripts')
 <script>
 @if(!$accounts->isEmpty())
-const balanceLabels = @json(collect($byType)->keys()->map(fn($t) => match($t) { 'bank'=>'Bank','ewallet'=>'E-Wallet','emoney'=>'E-Money','cash'=>'Cash','credit_card'=>'Kredit',default=>'Lain' })->values());
-const balanceData   = @json(collect($byType)->pluck('balance')->values());
-const spendingLabels = @json(collect($spendingByType)->keys()->map(fn($t) => match($t) { 'bank'=>'Bank','ewallet'=>'E-Wallet','emoney'=>'E-Money','cash'=>'Cash','credit_card'=>'Kredit',default=>'Lain' })->values());
-const spendingData   = @json(collect($spendingByType)->values());
+const balanceLabels = {!! json_encode(collect($byType)->keys()->map(fn($t) => match($t) { 'bank'=>'Bank','ewallet'=>'E-Wallet','emoney'=>'E-Money','cash'=>'Cash','credit_card'=>'Kredit',default=>'Lain' })->values()) !!};
+const balanceData   = {!! json_encode(collect($byType)->pluck('balance')->values()) !!};
+const spendingLabels = {!! json_encode(collect($spendingByType)->keys()->map(fn($t) => match($t) { 'bank'=>'Bank','ewallet'=>'E-Wallet','emoney'=>'E-Money','cash'=>'Cash','credit_card'=>'Kredit',default=>'Lain' })->values()) !!};
+const spendingData   = {!! json_encode(collect($spendingByType)->values()) !!};
 
 const palette = ['#8b5cf6','#3b82f6','#10b981','#f97316','#ef4444','#eab308'];
 

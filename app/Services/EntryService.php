@@ -31,6 +31,9 @@ class EntryService
         if (!empty($parsed['fund_name'])) $metadata['fund_name'] = $parsed['fund_name'];
         if (!empty($parsed['source_fund'])) $metadata['source_fund'] = $parsed['source_fund'];
         if (!empty($parsed['target_fund'])) $metadata['target_fund'] = $parsed['target_fund'];
+        if (!empty($parsed['direction'])) $metadata['direction'] = $parsed['direction'];
+        if (!empty($parsed['source_fund_id'])) $metadata['source_fund_id'] = (int) $parsed['source_fund_id'];
+        if (!empty($parsed['target_fund_id'])) $metadata['target_fund_id'] = (int) $parsed['target_fund_id'];
 
         $data = [
             'user_id' => $user->id,
@@ -92,7 +95,17 @@ class EntryService
 
             case 'transfer_fund':
                 $data['amount'] = $parsed['amount'] ?? 0;
-                $data['note'] = "Transfer ke " . ($parsed['target_fund'] ?? 'dana lain');
+                $direction = $parsed['direction'] ?? 'internal';
+                $data['note'] = match ($direction) {
+                    'in'  => "Terima ke " . ($parsed['target_fund'] ?? 'akun'),
+                    'out' => "Transfer dari " . ($parsed['source_fund'] ?? 'akun'),
+                    default => "Transfer ke " . ($parsed['target_fund'] ?? 'dana lain'),
+                };
+                // The resolved source account is stored on the entry directly.
+                if (!empty($parsed['source_fund_id'])) {
+                    $data['source_fund_id'] = (int) $parsed['source_fund_id'];
+                    $data['source_fund_confirmed'] = true;
+                }
                 break;
         }
 

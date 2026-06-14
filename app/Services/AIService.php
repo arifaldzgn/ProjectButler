@@ -31,9 +31,9 @@ class AIService
      * Parse a user message and return structured JSON with confidence score.
      * This is Prompt A — deterministic, no personality.
      */
-    public function parseMessage(string $message, ?string $userName = null, array $userCategories = []): ?array
+    public function parseMessage(string $message, ?string $userName = null, array $userCategories = [], array $userContext = []): ?array
     {
-        $systemPrompt = $this->buildParserPrompt($userCategories);
+        $systemPrompt = $this->buildParserPrompt($userCategories, $userContext);
         $startTime = microtime(true);
 
         try {
@@ -56,7 +56,7 @@ class AIService
             $validIntents = [
                 'log_expense', 'log_meal', 'log_income', 'log_saving',
                 'log_bill_payment', 'log_debt_payment', 'log_sinking_deposit',
-                'log_meal_and_expense',
+                'log_meal_and_expense', 'transfer_fund',
                 'add_bill', 'add_sinking_fund',
                 'query_balance', 'query_summary', 'query_spending',
                 'set_reminder', 'unknown',
@@ -158,7 +158,7 @@ PROMPT;
     // PROMPT BUILDERS
     // ════════════════════════════════════════════════════════════════════
 
-    private function buildParserPrompt(array $userCategories = []): string
+    private function buildParserPrompt(array $userCategories = [], array $userContext = []): string
     {
         $today = now()->timezone(config('butler.timezone'))->format('Y-m-d');
         $currentTime = now()->timezone(config('butler.timezone'))->format('H:i');
@@ -172,7 +172,7 @@ The user speaks mixed Indonesian/English. Currency abbreviations:
 - "rb" / "ribu" / "k" = × 1,000 IDR  (50rb = 50000)
 - "jt" / "juta" = × 1,000,000 IDR    (2jt = 2000000)
 
-═══ 14 INTENTS ═══
+═══ 15 INTENTS ═══
 
 1. log_expense — user spent money on daily things (no food name mentioned, or food name with NO calorie context needed)
 {
@@ -327,17 +327,23 @@ Triggers: "udah keluar berapa hari ini?", "pengeluaran bulan ini?"
   "trigger_days": "<mon,tue,... or null>"
 }
 
-14. transfer_fund — user wants to move money between funds/buckets
+14. transfer_fund — money moves between the user's own accounts/wallets/buckets, OR money is sent out from / received into one of them
 {
   "intent": "transfer_fund",
   "confidence": <0.000–1.000>,
   "amount": <number IDR>,
-  "source_fund": "<fund name to take from, or null>",
-  "target_fund": "<fund name to move to>"
+  "direction": "<out|in|internal>",
+  "source_fund": "<account/wallet/bucket the money LEAVES, or null if not stated>",
+  "target_fund": "<account/wallet/bucket the money ENTERS, or null if not stated>"
 }
-Triggers: "pindahkan 2jt dari tabungan ke jajan sebulan", "alokasikan 500rb ke dana darurat"
+DIRECTION RULES (decide carefully):
+- "in"  — money is RECEIVED into one of the user's accounts. Cues: "terima", "diterima", "ditransferin", "dapet transfer", "masuk ke X", "ke X" where X is the user's account and no sending wallet is mentioned as "pake/dari". Set target_fund = the receiving account, source_fund = null.
+- "out" — money is SENT OUT to someone/somewhere external using one of the user's wallets. Cues: "transfer/kirim ... pake X", "transfer ... dari X" with NO internal destination account. Set source_fund = the paying wallet, target_fund = null.
+- "internal" — money moves BETWEEN the user's own accounts/buckets. Cues: "dari X ke Y", "pindahkan ... ke Y", "alokasikan ... ke <bucket>". Set both if stated; if the source is not stated, leave source_fund = null (the app will ask).
+- source_fund and target_fund MUST be one of the user's known funds/accounts (see USER'S FUNDS list if provided). If a named place is NOT one of them, treat it as external (null), not as a fund.
+Triggers: "transfer 50k pake gopay" (out), "terima 50k ke bca" (in), "transfer 100k ke bca" (internal, source unknown), "pindahkan 2jt dari tabungan ke jajan sebulan" (internal)
 
-14. unknown — can't determine intent clearly
+15. unknown — can't determine intent clearly
 {
   "intent": "unknown",
   "confidence": <0.000–0.499>,
@@ -378,7 +384,19 @@ es jeruk: 90 | bubble tea: 350 | gorengan 1 pcs: 150
 → {"intent":"log_income","confidence":0.95,"amount":2000000,"source":"bonus","fund_name":"tabungan","note":"bonus"}
 
 "pindahkan 2jt ke jajan sebulan"
-→ {"intent":"transfer_fund","confidence":0.95,"amount":2000000,"source_fund":null,"target_fund":"jajan sebulan"}
+→ {"intent":"transfer_fund","confidence":0.95,"amount":2000000,"direction":"internal","source_fund":null,"target_fund":"jajan sebulan"}
+
+"tadi transfer 50k pake gopay"
+→ {"intent":"transfer_fund","confidence":0.95,"amount":50000,"direction":"out","source_fund":"gopay","target_fund":null}
+
+"terima 50k ke bca"
+→ {"intent":"transfer_fund","confidence":0.95,"amount":50000,"direction":"in","source_fund":null,"target_fund":"bca"}
+
+"transfer 100k ke bca"
+→ {"intent":"transfer_fund","confidence":0.9,"amount":100000,"direction":"internal","source_fund":null,"target_fund":"bca"}
+
+"pindahin 500rb dari gopay ke tabungan"
+→ {"intent":"transfer_fund","confidence":0.96,"amount":500000,"direction":"internal","source_fund":"gopay","target_fund":"tabungan"}
 
 "bayar kos 1.5jt"
 → {"intent":"log_bill_payment","confidence":0.94,"amount":1500000,"bill_name":"kos","note":null}
@@ -441,6 +459,40 @@ PROMPT;
         if (!empty($userCategories)) {
             $catList = implode(', ', array_map(fn($c) => '"' . $c . '"', $userCategories));
             $prompt .= "\n\n═══ USER CUSTOM CATEGORIES ═══\nFor log_expense category field, prefer one of these user-defined categories if it fits: {$catList}.\nOtherwise fall back to the standard category values.";
+        }
+
+        // ── Per-user grounding context (funds, learned calories, mode) ──────
+        // This makes extraction concrete instead of guessed: fund names map to
+        // the user's REAL funds, repeated foods reuse the user's corrected
+        // calories, and the active tracking mode steers ambiguous messages.
+        if (!empty($userContext['funds'])) {
+            $fundList = implode(', ', array_map(fn($f) => '"' . $f . '"', $userContext['funds']));
+            $prompt .= "\n\n═══ USER'S FUNDS / ACCOUNTS ═══\n"
+                . "When the message references a fund, account, or wallet, match it to one of these EXACT names: {$fundList}.\n"
+                . "Use the closest matching name verbatim in fund_name / account_name / source_fund / target_fund. "
+                . "If none clearly matches, leave the field null — do NOT invent a fund name.";
+        }
+
+        if (!empty($userContext['learned_foods'])) {
+            $foodLines = [];
+            foreach ($userContext['learned_foods'] as $food => $cal) {
+                $foodLines[] = "- \"{$food}\": {$cal} kcal";
+            }
+            $prompt .= "\n\n═══ USER'S CORRECTED CALORIES (authoritative) ═══\n"
+                . "The user has previously corrected these foods. If the message matches one, "
+                . "use the value below and set is_calorie_estimated=false:\n"
+                . implode("\n", $foodLines);
+        }
+
+        $mode = $userContext['mode'] ?? 'both';
+        if ($mode === 'finance') {
+            $prompt .= "\n\n═══ MODE: FINANCE-ONLY ═══\n"
+                . "This user does NOT track calories. Never emit log_meal. A bare food mention with a price "
+                . "is a plain log_expense (category food_drink); skip calorie/macro fields entirely.";
+        } elseif ($mode === 'calorie') {
+            $prompt .= "\n\n═══ MODE: CALORIE-ONLY ═══\n"
+                . "This user does NOT track money. Never emit log_expense / log_income / log_saving. "
+                . "Food mentions are log_meal even if a price appears (ignore the price).";
         }
 
         return $prompt;

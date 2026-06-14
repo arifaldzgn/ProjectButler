@@ -184,10 +184,10 @@
 @section('scripts')
 <script>
 @if($debts->isNotEmpty() && $debtByType->isNotEmpty())
-const debtTypeLabels = @json($debtByType->keys()->map(fn($t) => match($t) {
+const debtTypeLabels = {!! json_encode($debtByType->keys()->map(fn($t) => match($t) {
     'installment'=>'Cicilan','credit_card'=>'Kredit','personal_loan'=>'Pinjaman','mortgage'=>'KPR','paylater'=>'Paylater',default=>'Lain'
-})->values());
-const debtTypeData = @json($debtByType->values());
+})->values()) !!};
+const debtTypeData = {!! json_encode($debtByType->values()) !!};
 
 new Chart(document.getElementById('debtTypeChart'), {
     type: 'doughnut',

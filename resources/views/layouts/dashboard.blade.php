@@ -728,6 +728,10 @@
            class="sidebar-link {{ request()->routeIs('dashboard.debts') ? 'active' : '' }}">
             <i class="fas fa-credit-card"></i><span>Hutang</span>
         </a>
+        <a href="{{ route('finance-review.index') }}"
+           class="sidebar-link {{ request()->routeIs('finance-review.*') ? 'active' : '' }}">
+            <i class="fa-solid fa-magnifying-glass-chart"></i><span>Review Keuangan</span>
+        </a>
 
         <div class="sidebar-section">Lainnya</div>
         <a href="{{ route('dashboard.history') }}"
@@ -809,6 +813,10 @@
             <a href="{{ route('dashboard.debts') }}"
                class="drawer-item {{ request()->routeIs('dashboard.debts') ? 'active' : '' }}">
                 <i class="fas fa-credit-card"></i><span>Hutang</span>
+            </a>
+            <a href="{{ route('finance-review.index') }}"
+               class="drawer-item {{ request()->routeIs('finance-review.*') ? 'active' : '' }}">
+                <i class="fa-solid fa-magnifying-glass-chart"></i><span>Review</span>
             </a>
             @if(request()->dashboard_user?->isCalorieMode())
             <a href="{{ route('dashboard.nutrition') }}"

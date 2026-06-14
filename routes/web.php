@@ -64,6 +64,16 @@ Route::middleware('dashboard.session')->group(function () {
     Route::patch('/dashboard/categories/{category}', [CategoryController::class, 'update'])->name('dashboard.categories.update');
     Route::delete('/dashboard/categories/{category}', [CategoryController::class, 'destroy'])->name('dashboard.categories.destroy');
 
+    // Finance Review ("Sanggup Ga?")
+    Route::prefix('dashboard/finance-review')->name('finance-review.')->group(function () {
+        Route::get('/',             [\App\Http\Controllers\FinanceReviewController::class, 'show'])->name('index');
+        Route::get('/step/{step}',  [\App\Http\Controllers\FinanceReviewController::class, 'step'])->name('step')->whereNumber('step');
+        Route::post('/step/{step}', [\App\Http\Controllers\FinanceReviewController::class, 'saveStep'])->name('step.save')->whereNumber('step');
+        Route::get('/result',       [\App\Http\Controllers\FinanceReviewController::class, 'result'])->name('result');
+        Route::post('/recalculate', [\App\Http\Controllers\FinanceReviewController::class, 'recalculate'])->name('recalculate');
+        Route::post('/reset',       [\App\Http\Controllers\FinanceReviewController::class, 'reset'])->name('reset');
+    });
+
     // Impersonation leave
     Route::post('/admin/leave-impersonate', [AdminController::class, 'leaveImpersonate'])->name('admin.impersonate.leave');
 });

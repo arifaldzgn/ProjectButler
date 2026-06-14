@@ -46,7 +46,7 @@ class OpenRouterClient
      *
      * @return array|null Associative array containing ['text' => string, 'model_used' => string]
      */
-    public function generateText(string $systemPrompt, string $userMessage): ?array
+    public function generateText(string $systemPrompt, string $userMessage, int $maxTokens = 300): ?array
     {
         $payload = [
             'messages' => [
@@ -54,7 +54,7 @@ class OpenRouterClient
                 ['role' => 'user', 'content' => $userMessage],
             ],
             'temperature' => 0.7,
-            'max_tokens' => 300,
+            'max_tokens' => $maxTokens,
         ];
 
         return $this->executeWithFallback($payload, false);

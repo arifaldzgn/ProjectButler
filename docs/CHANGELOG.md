@@ -4,6 +4,103 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.6.1] 2026-06-14 — AI parser grounding + transfer/receipt fixes
+
+### Added
+
+**Direction-aware fund transfers (`transfer_fund` reworked)**
+- The parser now classifies every transfer into a `direction` — `in` (money received into an account), `out` (money sent out from a wallet), or `internal` (between the user's own accounts/buckets) — with cue-based rules and few-shot examples. Source/target must resolve to one of the user's real funds; an unknown place is treated as external (null), not invented.
+- `MessageRouter::handleTransfer()` applies only the legs that make sense:
+  - `in`  → credit target only ("terima 50k ke BCA")
+  - `out` → debit source only ("transfer 50k pake GoPay")
+  - `internal` → debit source + credit target ("pindahin 200k dari GoPay ke Tabungan")
+- **Source is never silently assumed.** When the paying account isn't stated, Butler consults a new learned memory (`BehavioralMemory::DOMAIN_TRANSFER_SOURCE`, subject `default`) for the account the user usually transfers from. If that's not confident yet, it **asks** ("Dari akun mana ke *BCA*?") via an inline keyboard of the user's real funds, then **remembers** the choice — so after a few transfers it stops asking. This matches the "daily account vs big-transfer account" distinction: the main spending account is no longer assumed to be the transfer source.
+- `applyFundEffect()`'s `transfer` case is now direction-aware and prefers resolved fund IDs (`source_fund_id` on the entry, `target_fund_id` in metadata) over name lookups; a self-transfer (same source/target) is rejected.
+- New callback `xfer_pick:{entryId}:{role}:{fundId}` completes a pending transfer after the user picks the source/target account.
+- Direction-aware Telegram copy: `formatTransferConfirmation()` and a new `formatTransferConfirmed()` render the correct "Dari/Ke" framing per direction (an outgoing transfer never reads like an incoming one).
+- Tests: `tests/Unit/TransferMessageTest.php` locks the direction→copy contract (7 cases, no DB).
+
+### Fixed
+
+**Receipt photo scanning was crashing on every successful scan**
+- `MessageRouter::handleReceiptPhoto()` called `$this->entryService->createPendingEntry()`, but the injected property is `$this->entries` — there is no `entryService` property. Any receipt that scanned above the 0.4 confidence threshold threw "undefined property" and the user got nothing. Corrected to `$this->entries`.
+
+**`transfer_fund` intent was dead end-to-end**
+- The whole transfer stack existed (`EntryService` maps `transfer_fund`→`transfer` and populates `source_fund`/`target_fund` metadata, `applyFundEffect` has a `transfer` case, `TelegramService::formatTransferConfirmation()`, `CommandSuggestionService` lists it) — but two links were missing, so "pindahkan 2jt ke jajan" always fell through to the "bingung" fallback:
+  1. `AIService::parseMessage()` validated against a whitelist that **omitted** `transfer_fund`, so the parser's own output was silently coerced to `unknown`.
+  2. `MessageRouter::handle()` never routed it (not in `$logIntents`, no `match` arm).
+- Added `transfer_fund` to the parser whitelist and to `$logIntents`. Added a `transfer` case to `entryToParsedArray()` so the confirmed message carries amount + source/target funds.
+
+**Parser prompt intent count**
+- Header said "14 INTENTS" while listing 15, and both `transfer_fund` and `unknown` were numbered "14". Renumbered to 15 with `unknown` as #15.
+
+### Changed
+
+**AI parser is now grounded in per-user context (was context-blind)**
+- `BehavioralMemoryService::getParserContext()` existed since v2.0 but was **never called** — learned food calories never reached the parser. Now wired in.
+- New `MessageRouter::buildParserContext(User)` assembles three grounding inputs and passes them through the extended `AIService::parseMessage(..., array $userContext)`:
+  - **Real fund names** — the parser matches `fund_name` / `account_name` / `source_fund` / `target_fund` against the user's actual funds instead of guessing free-text strings (and is told not to invent names).
+  - **Corrected calories** — foods the user previously corrected (behavioral memory, confidence ≥ 0.5) are injected as authoritative values with `is_calorie_estimated=false`.
+  - **Tracking mode** — finance-only users never get `log_meal` (a priced food is a plain expense); calorie-only users never get money intents. Saves tokens and removes a class of mis-parses.
+- `OpenRouterClient` and all other call sites are unchanged; `parseMessage`'s new `$userContext` arg is optional and backward-compatible.
+
+### Why
+Receipt scanning and fund transfers were both shipped but non-functional — silent dead code reachable by normal user phrasing. Separately, the parser had no knowledge of who it was parsing for: it guessed fund names and re-estimated calories the user had already corrected. Feeding it the user's real funds, learned values, and mode turns the most-used path (message → structured entry) from generic to personalized with no extra AI calls.
+
+---
+
+## [v2.6.0] 2026-06-12 — "Sanggup Ga?" Finance Review Wizard
+
+### Added
+
+**AI Finance Review — guided 7-step wizard + result page**
+- `finance_review_profiles` table — stores one review profile per user: demographics, housing, food habits, transport, tagihan snapshots, lifestyle, debt snapshots, wizard progress, cached AI insights.
+- `FinanceReviewProfile` model — typed casts for all JSON snapshot columns (`bills_snapshot`, `recurring_snapshot`, `debts_snapshot`), `isComplete()` and `nextStep()` helpers.
+- `FinanceReviewService` — all review logic:
+  - `getAutoFilledBills()` / `getAutoFilledRecurring()` / `getAutoFilledDebts()` — pull live DB data into pre-checked toggle lists; snapshots are preserved on re-visit so user edits are not overwritten.
+  - `getFoodEstimate()` / `getTransportEstimate()` — derive estimates from last 30 days of `entries`.
+  - `calculateBreakdown()` — produces labelled monthly cost lines for 6 categories (makan, transport, tempat_tinggal, tagihan, cicilan, gaya_hidup) with amounts and % of gaji.
+  - `getTangga()` — 5-level financial ladder (Bertahan Hidup → Stabil → Mulai Menabung → Aman & Proteksi → Bertumbuh), includes level-specific fokus utama, target naik tangga, and 3 concrete action steps.
+  - `getRatioCards()` — three deterministic ratio cards: Rasio Kebutuhan Pokok (target <55%), Rasio Tabungan (target ≥20%), Dana Darurat (vs emergency fund balance from `funds` table).
+  - `getAlternatifKota()` — cost-of-living delta for up to 6 alternative cities using BPS 2026 UMK data + relative CoL multipliers for 15 Indonesian cities.
+  - `generateInsights()` — calls `OpenRouterClient::generateText()` with 600 max_tokens; Indonesian personal finance coach persona, benchmarks, 3 actionable recommendations.
+  - `normalizeDomisili()` — maps free-text city input to a normalized key for UMK lookup.
+- `FinanceReviewController` — 6 actions: `show` (redirect to current step or result), `step` (GET), `saveStep` (POST, per-step upsert), `result` (full breakdown computation), `recalculate` (AI-only refresh), `reset` (delete profile, restart).
+- 7 wizard step views (`resources/views/finance-review/steps/step1–7.blade.php`):
+  - Step 1: Profil & Pendapatan — domisili autocomplete, gaji bersih (pre-fills from `users.monthly_income_idr`).
+  - Step 2: Tempat Tinggal — 5-option tile selector for housing status; cost field hidden when "Tinggal di Ortu".
+  - Step 3: Kebutuhan Makan — cook % slider, makan dasar input, nongkrong frequency (4 options with auto-estimated cost).
+  - Step 4: Transportasi — transport type grid, commute km, monthly cost.
+  - Step 5: Tagihan & Langganan — auto-filled toggle list from `bills` + `recurring_entries`; reactive total.
+  - Step 6: Tanggungan & Gaya Hidup — tanggungan count tiles, kiriman keluarga, rokok, gym, asuransi, mudik (all optional).
+  - Step 7: Cicilan & Hutang — auto-filled toggle list from `debts`; empty-state with link to Debt Manager.
+- `result.blade.php` — full "Sanggup Ga?" result page with 9 sections:
+  1. Hero card: sisa dana/bulan, spending bar, UMK comparison, Gaji vs UMK %.
+  2. Tangga Finansial: accordion ladder (5 levels), active level expanded with fokus, target, 3 langkah konkret.
+  3. Insight AI — AI narrative with "Perbarui Analisis" button + last-generated timestamp.
+  4. Kartu Rasio Keuangan — 3 deterministic cards with Baik/Perlu Perhatian/Bahaya traffic-light badges.
+  5. Alternatif Kota (up to 6 cities with sisa-dana delta) + Distribusi Pengeluaran (Chart.js doughnut).
+  6. Simulasi "What If?" — pure Alpine.js interactive toggles (masak sendiri, transportasi umum) + range slider (biaya kos); sisa dana updates live with no server round-trip.
+  7. Realitas di [Kota] — pemasukan vs gaji ideal nyaman vs UMK with contextual banner.
+  8. Two stat cards: Potensi Tabungan Tahunan (sisa × 12), Rasio Pengeluaran.
+  9. Edukasi Finansial — contextual accordion (4 topics), disclaimer banner.
+- Entry point: "Review Keuangan" link in desktop sidebar and mobile drawer (`fa-magnifying-glass-chart` icon).
+- 6 new routes inside `dashboard.session` middleware: `finance-review.{index, step, step.save, result, recalculate, reset}`.
+
+### Changed
+- `OpenRouterClient::generateText()` now accepts optional `$maxTokens` parameter (default 300); finance review passes 600.
+- `layouts/dashboard.blade.php` — added "Review Keuangan" sidebar link and mobile drawer item.
+
+### Migration added
+| File | Purpose |
+|---|---|
+| `2026_06_12_100001_create_finance_review_profiles_table` | finance_review_profiles — all review fields, progress tracking, AI insights cache |
+
+### Why
+Users had daily transaction tracking but no way to see their complete monthly cost picture in one place. "Sanggup Ga?" gives a structured self-assessment: auto-fills known data (bills, debts, recurring), collects missing dimensions (housing, food habits, lifestyle), and produces a city-contextual financial health review with AI narrative, interactive what-if simulations, and actionable education — all without requiring a financial advisor.
+
+---
+
 ## [Unreleased] — Architecture v2 (2026-06-03)
 
 ### Added

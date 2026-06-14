@@ -295,6 +295,44 @@ class TelegramService
     }
 
     /**
+     * Ask which account to use as the source/target of a pending transfer.
+     *
+     * @param  string  $role      'src' or 'tgt'
+     * @param  array   $accounts  [ ['id' => 1, 'name' => 'GoPay'], ... ]
+     * @param  string  $prompt    question text (Markdown allowed)
+     */
+    public function sendTransferAccountKeyboard(
+        string $chatId,
+        int $entryId,
+        string $role,
+        array $accounts,
+        string $prompt
+    ): ?int {
+        $buttons = [];
+        foreach ($accounts as $account) {
+            $buttons[] = [
+                'text'          => $account['name'],
+                'callback_data' => "xfer_pick:{$entryId}:{$role}:{$account['id']}",
+            ];
+        }
+
+        $keyboard = ['inline_keyboard' => array_chunk($buttons, 2)];
+
+        try {
+            $response = Http::post("{$this->baseUrl}/sendMessage", [
+                'chat_id'      => $chatId,
+                'text'         => $prompt,
+                'parse_mode'   => 'Markdown',
+                'reply_markup' => json_encode($keyboard),
+            ]);
+            return $response->json('result.message_id');
+        } catch (\Exception $e) {
+            Log::error('Telegram sendTransferAccountKeyboard failed', ['message' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
      * Send the consent gate question when behavioral confidence crosses 0.80.
      * Strict format per v2.1 spec: no emoji overload, no emotional phrasing.
      */
@@ -507,20 +545,39 @@ class TelegramService
      */
     public function formatTransferConfirmation(array $parsed, float $confidence): string
     {
-        $amount = number_format($parsed['amount'] ?? 0, 0, ',', '.');
-        $source = $parsed['source_fund'] ?? 'Tabungan';
-        $target = $parsed['target_fund'] ?? 'dana lain';
+        $amount    = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $direction = $parsed['direction'] ?? 'internal';
+        $source    = $parsed['source_fund'] ?? null;
+        $target    = $parsed['target_fund'] ?? null;
 
-        $msg = "🔄 *Transfer uang terdeteksi:*\n\n"
-            . "💰 Rp {$amount}\n"
-            . "📤 Dari: {$source}\n"
-            . "📥 Ke: {$target}\n";
+        $msg = match ($direction) {
+            'in'  => "📥 *Uang masuk terdeteksi:*\n\n💰 Rp {$amount}\n📥 Ke: " . ($target ?? 'akun kamu') . "\n",
+            'out' => "📤 *Transfer keluar terdeteksi:*\n\n💰 Rp {$amount}\n📤 Dari: " . ($source ?? 'akun kamu') . "\n",
+            default => "🔄 *Pindah dana terdeteksi:*\n\n💰 Rp {$amount}\n📤 Dari: " . ($source ?? '?') . "\n📥 Ke: " . ($target ?? '?') . "\n",
+        };
 
         if ($confidence < 0.75) {
             $msg .= "\n⚠️ _Butler kurang yakin. Cek dulu ya!_";
         }
 
         return $msg;
+    }
+
+    /**
+     * Confirmed-state line for a transfer, by direction.
+     */
+    private function formatTransferConfirmed(array $parsed): string
+    {
+        $amount    = number_format($parsed['amount'] ?? 0, 0, ',', '.');
+        $direction = $parsed['direction'] ?? 'internal';
+        $source    = $parsed['source_fund'] ?? null;
+        $target    = $parsed['target_fund'] ?? null;
+
+        return match ($direction) {
+            'in'  => "📥 Diterima Rp {$amount}" . ($target ? " ke {$target}" : '') . ".",
+            'out' => "📤 Transfer Rp {$amount}" . ($source ? " dari {$source}" : '') . " tercatat.",
+            default => "🔄 Pindah Rp {$amount}" . ($source ? " dari {$source}" : '') . ($target ? " ke {$target}" : '') . ".",
+        };
     }
 
     /**
@@ -538,7 +595,7 @@ class TelegramService
             'bill_payment'         => 'Tagihan ' . ($parsed['bill_name'] ?? 'Tagihan') . ' dibayar' . $deductedFrom . '.',
             'debt_payment'         => 'Cicilan ' . ($parsed['debt_name'] ?? 'Cicilan') . ' dibayar' . $deductedFrom . '.',
             'sinking_fund_deposit' => 'Setoran ke ' . ($parsed['fund_name'] ?? 'Dana') . ' disimpan' . $deductedFrom . '.',
-            'transfer'             => 'Transfer Rp ' . number_format($parsed['amount'] ?? 0, 0, ',', '.') . ' selesai.',
+            'transfer'             => $this->formatTransferConfirmed($parsed),
             default                => 'Dicatat.',
         };
     }
