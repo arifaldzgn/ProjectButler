@@ -55,6 +55,7 @@ Route::middleware('dashboard.session')->group(function () {
     Route::get('/dashboard/cashflow',      [DashboardController::class, 'cashflow'])->name('dashboard.cashflow');
     Route::get('/dashboard/timeline',      [DashboardController::class, 'timeline'])->name('dashboard.timeline');
     Route::get('/dashboard/debts',         [DashboardController::class, 'debtManager'])->name('dashboard.debts');
+    Route::get('/dashboard/help',         [DashboardController::class, 'help'])->name('dashboard.help');
     Route::get('/dashboard/memory',       [DashboardController::class, 'memory'])->name('dashboard.memory');
     Route::delete('/dashboard/memory/{memory}', [DashboardController::class, 'deleteMemory'])->name('dashboard.memory.delete');
     Route::get('/dashboard/settings',     [DashboardController::class, 'settings'])->name('dashboard.settings');

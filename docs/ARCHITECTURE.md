@@ -1,7 +1,7 @@
 # Project Butler — Architecture Reference
 
 > Living document. Updated with every architecture revision.
-> Current version: **v2.6.1 (2026-06-14)**
+> Current version: **v2.6.2 (2026-06-14)**
 
 ---
 
@@ -230,6 +230,12 @@ finance_review_profiles  — one review profile per user ("Sanggup Ga?")
 | `POST` | `/dashboard/finance-review/recalculate` | Refresh AI insights only |
 | `POST` | `/dashboard/finance-review/reset` | Delete profile, restart wizard |
 
+### Dashboard — Help (session auth, `dashboard.session` middleware)
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/dashboard/help` | Full capability guide (v2.6.2), mode-filtered via `CapabilityCatalog` |
+| `GET` | `/dashboard/auth/{telegram_id}?next=help` | Signed entry → session → redirect to Help tab |
+
 ### Idempotency
 Send `Idempotency-Key: <uuid>` header to deduplicate retried requests.
 TTL: 10 minutes (configurable via `SHORTCUT_IDEMPOTENCY_TTL`).
@@ -253,6 +259,32 @@ IntentDetected         → (extensible, no listener yet)
 
 All listeners run async on the `low` queue — they never block the `high` queue
 that handles message routing.
+
+---
+
+## Help & Discoverability (v2.6.2)
+
+`CapabilityCatalog` is the single source of truth for "what can Butler do?". It
+feeds two surfaces, which therefore never drift:
+
+```
+CapabilityCatalog::groupsForUser(User)   ← mode-filtered (finance/calorie/all)
+  ├─ Telegram → MessageRouter::sendHelp()         (grouped text + live snapshot + button)
+  └─ Web      → DashboardController::help()        (/dashboard/help — cards, tap-to-copy)
+```
+
+Discovery paths into help:
+- Exact keywords: `help`, `bantuan`, `/help`, `/start`.
+- `MessageRouter::looksLikeHelpRequest()` — natural phrasings ("butler bisa apa aja",
+  "list command", "menu", "fitur apa aja", "what can you do") matched in the
+  quick-command gate, before any AI call. Tuned to avoid misfiring on real
+  transactions ("menu makan 50k").
+- The *Panduan Lengkap* button uses a signed `dashboard.auth` link with a
+  whitelisted `?next=help`, so it establishes the session then lands on the Help tab.
+
+Separately, `CommandSuggestionService` (v2.3.0) handles *mistyped / unsupported*
+messages with a two-stage "🤔 Maksudmu …?" / "Butler belum bisa itu, coba …" engine
+that resolves to the closest supported command.
 
 ---
 

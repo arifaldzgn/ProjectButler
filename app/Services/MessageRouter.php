@@ -355,6 +355,11 @@ class MessageRouter
             $this->sendHelp($user, $chatId);
             return true;
         }
+        // Natural "what can you do?" / "list command" phrasings → full help.
+        if ($this->looksLikeHelpRequest($message)) {
+            $this->sendHelp($user, $chatId);
+            return true;
+        }
         if (in_array($msg, ['/tagihan', 'tagihan', 'list tagihan', 'daftar tagihan'])) {
             $this->sendBillList($user, $chatId);
             return true;
@@ -1444,61 +1449,102 @@ class MessageRouter
         }
     }
 
+    /**
+     * Full capability listing. Triggered by `help`, by natural phrases like
+     * "butler bisa apa aja" / "list command", and by /start. Rendered from the
+     * shared CapabilityCatalog so Telegram and the web Help tab never drift.
+     */
     private function sendHelp(User $user, string $chatId): void
     {
-        $help = "🤖 *Butler - Asisten Harianmu*\n\n"
-            . "Kirim pesan biasa, Butler otomatis ngerti!\n\n";
+        $catalog = app(CapabilityCatalog::class);
 
-        if ($user->isFinanceMode()) {
-            $help .= "💸 *Pengeluaran:* `makan nasi goreng 35k`\n"
-                . "💰 *Income:* `gajian 5jt`\n"
-                . "🧾 *Tagihan:* `bayar kos 1.5jt`\n"
-                . "💳 *Cicilan:* `bayar cicilan motor 800rb`\n"
-                . "💎 *Tabungan:* `nabung 500rb ke dana darurat`\n"
-                . "✈️ *Sinking Fund:* `masukin 200k ke nabung liburan`\n\n";
+        $help = "🤖 *Apa aja yang bisa Butler lakuin?*\n\n"
+            . "Nggak perlu hafal perintah — kirim aja pesan biasa, Butler ngerti sendiri.\n";
+
+        // One emoji per group key so the text stays scannable on mobile.
+        $groupEmoji = [
+            'catat_uang' => '💸', 'catat_sehat' => '🍽️', 'atur' => '🛠️',
+            'cek' => '📊', 'lainnya' => '✨',
+        ];
+
+        foreach ($catalog->groupsForUser($user) as $group) {
+            $emoji = $groupEmoji[$group['key']] ?? '•';
+            $help .= "\n{$emoji} *{$group['label']}*\n";
+            foreach ($group['items'] as $item) {
+                $example = $item['examples'][0] ?? '';
+                $help   .= "• {$item['label']}: `{$example}`\n";
+            }
         }
 
-        if ($user->isCalorieMode()) {
-            $help .= "🍽️ *Makanan:* `makan nasi goreng`\n";
-            $help .= "😊 *Mood:* `mood: good, energi 4`\n\n";
-        }
-
-        $help .= "📊 *Cek Data:*\n"
-            . "• `summary` — ringkasan hari ini\n"
-            . "• `saldo` — semua dana & budget\n"
-            . "• `tagihan` — daftar tagihan\n"
-            . "• `buka dashboard` — webview lengkap\n"
-            . "• `settings` — ubah profil & tujuan\n\n";
-
-        // Add today's live snapshot so help is actually useful
+        // Live snapshot so help doubles as a quick status check.
+        $snapshot = [];
         if ($user->isFinanceMode()) {
             $spent     = $this->entries->getTodaySpending($user);
             $remaining = $this->entries->getBudgetRemaining($user);
             $spentF    = number_format($spent, 0, ',', '.');
-            $help     .= "📅 *Hari ini:* Rp {$spentF} terpakai";
+            $line      = "📅 Hari ini: Rp {$spentF} terpakai";
             if ($remaining !== null) {
                 $remF  = number_format(abs($remaining), 0, ',', '.');
-                $help .= $remaining >= 0 ? " · sisa Rp {$remF}" : " · ⚠️ lebih Rp {$remF}";
+                $line .= $remaining >= 0 ? " · sisa Rp {$remF}" : " · ⚠️ lebih Rp {$remF}";
             }
-            $help .= "\n";
+            $snapshot[] = $line;
         }
-
         if ($user->isCalorieMode()) {
             $cal  = $this->entries->getTodayCalories($user);
             $goal = $user->daily_calorie_goal;
             if ($cal > 0 || $goal) {
-                $help .= "🔥 *Kalori:* {$cal}";
-                if ($goal) $help .= "/{$goal}";
-                $help .= " kcal\n";
+                $snapshot[] = "🔥 Kalori: {$cal}" . ($goal ? "/{$goal}" : '') . " kcal";
             }
         }
-
         $streak = $user->streak;
         if ($streak && $streak->log_current > 0) {
-            $help .= "🔥 *Streak:* {$streak->log_current} hari";
+            $snapshot[] = "🔥 Streak: {$streak->log_current} hari";
+        }
+        if ($snapshot) {
+            $help .= "\n──────────────\n" . implode("\n", $snapshot);
         }
 
-        $this->telegram->sendMessage($chatId, $help);
+        // Button to the full web guide (signed, 30-min link; lands on Help tab
+        // after the dashboard session is established).
+        $url = URL::temporarySignedRoute(
+            'dashboard.auth',
+            now()->addMinutes(30),
+            ['telegram_id' => $user->telegram_chat_id, 'next' => 'help']
+        );
+
+        $this->telegram->sendMessageWithInlineKeyboard(
+            $chatId,
+            $help,
+            [['text' => '📖 Panduan Lengkap', 'url' => $url]]
+        );
+    }
+
+    /**
+     * Does this message look like "what can you do?" / "list all commands"?
+     * Catches the many phrasings users reach for when they don't know the
+     * exact help keyword, so they always land on the full capability list.
+     */
+    private function looksLikeHelpRequest(string $msg): bool
+    {
+        $m = trim(mb_strtolower($msg));
+
+        // Whole-message matches (avoid catching "bantu aku catat ...").
+        $exact = ['menu', 'fitur', 'perintah', 'command', 'commands', 'list command',
+                  'daftar perintah', 'daftar command', 'list fitur', 'panduan', 'tutorial'];
+        if (in_array($m, $exact, true)) return true;
+
+        // Phrase contains — natural questions about capability.
+        $phrases = [
+            'bisa apa', 'apa aja yang bisa', 'apa saja yang bisa', 'yang bisa dilakukan',
+            'apa yang bisa kamu', 'kamu bisa apa', 'butler bisa apa', 'fitur apa',
+            'fitur apa aja', 'fitur apa saja', 'list command', 'list semua',
+            'daftar perintah', 'daftar fitur', 'gimana cara pakai', 'cara pakai',
+            'gunanya apa', 'fungsinya apa', 'what can you do', 'list all command',
+        ];
+        foreach ($phrases as $p) {
+            if (str_contains($m, $p)) return true;
+        }
+        return false;
     }
 
     private function sendBillList(User $user, string $chatId): void

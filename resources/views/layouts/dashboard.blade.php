@@ -746,6 +746,10 @@
            class="sidebar-link {{ request()->routeIs('dashboard.settings') ? 'active' : '' }}">
             <i class="fas fa-gear"></i><span>Settings</span>
         </a>
+        <a href="{{ route('dashboard.help') }}"
+           class="sidebar-link {{ request()->routeIs('dashboard.help') ? 'active' : '' }}">
+            <i class="fas fa-circle-question"></i><span>Panduan</span>
+        </a>
         @if(request()->dashboard_user?->isAdmin() && !session()->has('admin_impersonator_id'))
         <a href="{{ route('admin.users.index') }}"
            class="sidebar-link admin-link {{ request()->routeIs('admin.*') ? 'active' : '' }}">
@@ -832,6 +836,10 @@
                class="drawer-item {{ request()->routeIs('dashboard.settings') ? 'active' : '' }}">
                 <i class="fas fa-gear"></i><span>Settings</span>
             </a>
+            <a href="{{ route('dashboard.help') }}"
+               class="drawer-item {{ request()->routeIs('dashboard.help') ? 'active' : '' }}">
+                <i class="fas fa-circle-question"></i><span>Panduan</span>
+            </a>
             @if(request()->dashboard_user?->isAdmin() && !session()->has('admin_impersonator_id'))
             <a href="{{ route('admin.users.index') }}"
                class="drawer-item {{ request()->routeIs('admin.*') ? 'active' : '' }}"
@@ -861,7 +869,7 @@
             <i class="fas fa-lightbulb"></i><span>Insights</span>
         </a>
         <button type="button"
-           class="bottom-tab {{ request()->routeIs('dashboard.distribution','dashboard.cashflow','dashboard.timeline','dashboard.debts','dashboard.nutrition','dashboard.memory','dashboard.settings','admin.*') ? 'active' : '' }}"
+           class="bottom-tab {{ request()->routeIs('dashboard.distribution','dashboard.cashflow','dashboard.timeline','dashboard.debts','dashboard.nutrition','dashboard.memory','dashboard.settings','dashboard.help','admin.*') ? 'active' : '' }}"
            @click="moreOpen = !moreOpen">
             <i class="fas fa-bars"></i><span>More</span>
         </button>

@@ -4,6 +4,32 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.6.2] 2026-06-14 — Discoverable help: "what can Butler do?" everywhere
+
+### Added
+
+**`CapabilityCatalog` — one source of truth for "what can Butler do?"**
+- New `app/Services/CapabilityCatalog.php`. Groups every capability (Catat Keuangan, Catat Kesehatan, Atur Keuangan, Cek & Lihat, Lainnya) with label, description, and real example phrasings per item.
+- Each item declares `modes` (`finance` / `calorie` / `all`); `groupsForUser(User)` filters the list to what the user actually tracks (finance-only users never see meal/mood help, and vice-versa) and drops empty groups.
+- Both surfaces render from this catalog so they can never drift apart:
+  - **Telegram** — `MessageRouter::sendHelp()` rewritten to render the grouped catalog as text (was a hard-coded subset) plus a live today's-snapshot and a *📖 Panduan Lengkap* button.
+  - **Web** — new Help tab.
+
+**Help tab (`/dashboard/help`)**
+- `DashboardController::help()` + `resources/views/dashboard/help.blade.php` — full capability guide as grouped cards, each example a tap-to-copy chip. Mode-filtered via `CapabilityCatalog::groupsForUser()`.
+- Nav entry added to desktop sidebar ("Panduan", `fa-circle-question`) and mobile drawer; the mobile "More" tab now lights up on this page.
+- Route added inside `dashboard.session`. Telegram's *Panduan Lengkap* button deep-links here: `DashboardController::auth()` gained an optional whitelisted `?next=` param (`help` / `settings`) so a signed link can land directly on a page after establishing the session, instead of always bouncing to the home index.
+
+**Natural "list all commands" detection**
+- `MessageRouter::looksLikeHelpRequest()` catches the many ways users ask what Butler can do — "butler bisa apa aja", "apa saja yang bisa dilakukan", "list command", "fitur apa aja", "menu", "perintah", "gimana cara pakai", "what can you do", etc. — and routes them to the full help list.
+- Wired into the quick-command gate (before AI parse), so these phrasings get an instant, free, complete answer instead of falling through to a generic AI reply.
+- Whole-message matches for short ambiguous words ("menu", "fitur") and substring matches for natural questions, tuned so real transactions ("menu makan 50k", "transfer 100k ke bca") never misfire.
+
+### Why
+Butler already understood free-text logging, but *discovery* was weak: the static `help`/`bantuan` keywords showed only a partial list, and a user typing "butler bisa apa aja" or "list command" got a generic fallback instead of the answer. Now any reasonable phrasing of "what can you do?" surfaces the complete, mode-aware capability list in Telegram, with a one-tap link to a full web guide — and both are generated from a single catalog, so adding a feature updates every help surface at once. This complements the existing `CommandSuggestionService` "🤔 Maksudmu …?" / "Butler belum bisa itu, coba …" engine, which already nudges mistyped or unsupported messages toward the closest real command.
+
+---
+
 ## [v2.6.1] 2026-06-14 — AI parser grounding + transfer/receipt fixes
 
 ### Added

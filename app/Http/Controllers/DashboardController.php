@@ -33,6 +33,17 @@ class DashboardController extends Controller
             'dashboard_expires'  => now()->addMinutes(30)->timestamp,
         ]);
 
+        // Optional deep-link target (whitelisted) so Telegram buttons can land
+        // straight on a specific page after the session is established.
+        $allowedNext = [
+            'help'     => 'dashboard.help',
+            'settings' => 'dashboard.settings',
+        ];
+        $next = $request->query('next');
+        if ($next && isset($allowedNext[$next])) {
+            return redirect()->route($allowedNext[$next]);
+        }
+
         return redirect()->route('dashboard.index');
     }
 
@@ -725,6 +736,14 @@ class DashboardController extends Controller
         $entry->update(array_filter($validated, fn ($v) => $v !== null));
 
         return response()->json(['ok' => true]);
+    }
+
+    public function help(Request $request): View
+    {
+        $user   = $request->dashboard_user;
+        $groups = app(\App\Services\CapabilityCatalog::class)->groupsForUser($user);
+
+        return view('dashboard.help', compact('user', 'groups'));
     }
 
     public function memory(Request $request): View
