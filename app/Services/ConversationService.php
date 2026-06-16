@@ -56,12 +56,13 @@ class ConversationService
     }
 
     /**
-     * Retrieve the last N messages from a user's active conversation on a channel.
-     * Useful for building AI context windows in future implementations.
+     * Retrieve the last N messages from a user's active conversation on a channel,
+     * optionally restricted to turns newer than $sinceMinutes so a stale thread
+     * doesn't bleed into a fresh message. Returned oldest-first.
      *
      * @return \Illuminate\Database\Eloquent\Collection<ConversationMessage>
      */
-    public function getRecentHistory(User $user, string $channel, ?string $channelId, int $limit = 10)
+    public function getRecentHistory(User $user, string $channel, ?string $channelId, int $limit = 10, ?int $sinceMinutes = null)
     {
         $conversation = Conversation::where([
             'user_id'    => $user->id,
@@ -75,6 +76,7 @@ class ConversationService
         }
 
         return $conversation->messages()
+            ->when($sinceMinutes !== null, fn ($q) => $q->where('created_at', '>=', now()->subMinutes($sinceMinutes)))
             ->orderBy('created_at', 'desc')
             ->limit($limit)
             ->get()

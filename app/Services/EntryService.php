@@ -225,6 +225,112 @@ class EntryService
     }
 
     /**
+     * Filtered, scoped analytics over the user's own confirmed entries.
+     * Read-only aggregation — all inputs are whitelisted and bound, no raw SQL.
+     *
+     * $filters: [
+     *   'metric'     => sum|count|average                 (default sum)
+     *   'entry_type' => expense|income|meal|saving|all     (default expense)
+     *   'category'   => ?string (loose match on category text column)
+     *   'merchant'   => ?string (loose match on merchant + note + food_item)
+     *   'period'     => today|yesterday|week|month|last_month|all  (default month)
+     * ]
+     *
+     * Returns a shape the TelegramService formatter renders directly.
+     */
+    public function analyticsQuery(User $user, array $filters): array
+    {
+        $metric    = in_array($filters['metric'] ?? 'sum', ['sum', 'count', 'average'], true) ? $filters['metric'] : 'sum';
+        $entryType = in_array($filters['entry_type'] ?? 'expense', ['expense', 'income', 'meal', 'saving', 'all'], true) ? $filters['entry_type'] : 'expense';
+        $period    = in_array($filters['period'] ?? 'month', ['today', 'yesterday', 'week', 'month', 'last_month', 'all'], true) ? $filters['period'] : 'month';
+        $category  = isset($filters['category']) ? trim((string) $filters['category']) : '';
+        $merchant  = isset($filters['merchant']) ? trim((string) $filters['merchant']) : '';
+
+        [$start, $end] = $this->periodRange($user, $period);
+
+        $q = Entry::forUser($user->id)->confirmed()
+            ->whereBetween('entry_time', [$start, $end]);
+
+        if ($entryType !== 'all') {
+            $q->where('type', $entryType);
+        }
+
+        if ($category !== '') {
+            $q->whereRaw('LOWER(category) LIKE ?', ['%' . mb_strtolower($category) . '%']);
+        }
+
+        if ($merchant !== '') {
+            $kw = '%' . mb_strtolower($merchant) . '%';
+            $q->where(function ($sub) use ($kw) {
+                $sub->whereRaw('LOWER(merchant) LIKE ?', [$kw])
+                    ->orWhereRaw('LOWER(note) LIKE ?', [$kw])
+                    ->orWhereRaw('LOWER(food_item) LIKE ?', [$kw]);
+            });
+        }
+
+        // Calorie questions sum the calories column; everything else sums amount.
+        $isCalorie = ($entryType === 'meal' && $metric !== 'count');
+        $sumColumn = $isCalorie ? 'calories' : 'amount';
+
+        $count = (clone $q)->count();
+        $sum   = (int) (clone $q)->sum($sumColumn);
+
+        $value = match ($metric) {
+            'count'   => $count,
+            'average' => $this->perDayAverage($sum, $start, $end),
+            default   => $sum,
+        };
+
+        return [
+            'metric'       => $metric,
+            'entry_type'   => $entryType,
+            'is_calorie'   => $isCalorie,
+            'value'        => $value,
+            'count'        => $count,
+            'category'     => $category ?: null,
+            'merchant'     => $merchant ?: null,
+            'period'       => $period,
+            'period_label' => $this->periodLabel($period),
+        ];
+    }
+
+    /**
+     * Resolve a named period into a [start, end] Carbon range in the user's tz.
+     * "week" = the last 7 days ending today (intuitive, not ISO Mon–Sun).
+     */
+    private function periodRange(User $user, string $period): array
+    {
+        $now = Carbon::now($user->timezone);
+
+        return match ($period) {
+            'today'      => [$now->copy()->startOfDay(), $now->copy()->endOfDay()],
+            'yesterday'  => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            'week'       => [$now->copy()->subDays(6)->startOfDay(), $now->copy()->endOfDay()],
+            'last_month' => [$now->copy()->subMonthNoOverflow()->startOfMonth(), $now->copy()->subMonthNoOverflow()->endOfMonth()],
+            'all'        => [Carbon::create(2000, 1, 1, 0, 0, 0, $user->timezone), $now->copy()->endOfDay()],
+            default      => [$now->copy()->startOfMonth(), $now->copy()->endOfDay()], // month-to-date
+        };
+    }
+
+    private function periodLabel(string $period): string
+    {
+        return match ($period) {
+            'today'      => 'hari ini',
+            'yesterday'  => 'kemarin',
+            'week'       => 'minggu ini',
+            'last_month' => 'bulan lalu',
+            'all'        => 'semua waktu',
+            default      => 'bulan ini',
+        };
+    }
+
+    private function perDayAverage(int $sum, Carbon $start, Carbon $end): int
+    {
+        $days = max(1, (int) $start->diffInDays($end) + 1);
+        return (int) round($sum / $days);
+    }
+
+    /**
      * Fuzzy-match an AI-returned category string to a user's custom Category row.
      * Returns null if no match found — falls back to the text-based category column.
      */

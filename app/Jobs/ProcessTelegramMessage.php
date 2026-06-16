@@ -107,6 +107,24 @@ class ProcessTelegramMessage implements ShouldQueue
                         extra:     ['ai_latency_ms' => $latencyMs, 'intent' => $intentHint],
                     );
                 }
+            } else {
+                // ── Telegram: record Butler's reply so conversational memory can
+                //    see its own prior turns (e.g. "🤔 Maksudmu …?" → user "iya").
+                //    Best-effort: a logging failure must never break the response.
+                try {
+                    $responseText = $telegram->getLastSentText();
+                    if ($responseText) {
+                        $conversations->recordAssistantTurn(
+                            user:      $user,
+                            channel:   'telegram',
+                            channelId: $channelId,
+                            content:   $responseText,
+                            extra:     ['ai_latency_ms' => $latencyMs],
+                        );
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to record telegram assistant turn', ['error' => $e->getMessage()]);
+                }
             }
 
             // ── Analytics (non-blocking, best-effort, low-priority queue via listener)

@@ -69,6 +69,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Conversational Memory
+    |--------------------------------------------------------------------------
+    |
+    | Feeds a short window of recent conversation turns into the AI parser and
+    | the casual-chat fallback so Butler can resolve follow-ups and references
+    | ("yang tadi gojek", one-word replies like "iya").
+    |
+    | enabled         — Deploy-free kill-switch. Set false to revert to single-turn
+    |                   parsing instantly if the context ever destabilizes parsing.
+    | window_minutes  — Only turns newer than this are considered (stale threads
+    |                   never bleed into a fresh message).
+    | turns           — Max number of recent turns included in the context window.
+    |
+    */
+    'conversation_context_enabled' => (bool) env('BUTLER_CONVERSATION_CONTEXT', true),
+    'conversation_window_minutes'  => (int) env('BUTLER_CONVERSATION_WINDOW_MINUTES', 30),
+    'conversation_turns'           => (int) env('BUTLER_CONVERSATION_TURNS', 6),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Inline Calorie Edit
+    |--------------------------------------------------------------------------
+    |
+    | After a meal is logged with an estimated calorie figure, the user can just
+    | type a calorie correction ("500cal", "500 kalori", or a bare "500") to fix
+    | it — no button tap. This window is how long that bare-number shortcut and
+    | the "most recent meal" fallback stay active after the meal is logged.
+    |
+    */
+    'calorie_edit_window_minutes' => (int) env('BUTLER_CALORIE_EDIT_WINDOW_MINUTES', 15),
+
+    /*
+    |--------------------------------------------------------------------------
     | Shortcut API
     |--------------------------------------------------------------------------
     |

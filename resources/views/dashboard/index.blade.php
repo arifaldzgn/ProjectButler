@@ -101,7 +101,11 @@
                      style="width:{{ $pct }}%"></div>
             </div>
             <div class="card-subtitle" style="margin-top:6px; color: {{ $rem >= 0 ? 'var(--text-muted)' : 'var(--red)' }}">
-                {{ $rem >= 0 ? 'Sisa Rp '.number_format($rem,0,',','.') : '<i class="fas fa-triangle-exclamation"></i> Over Rp '.number_format(abs($rem),0,',','.') }}
+                @if($rem >= 0)
+                    Sisa Rp {{ number_format($rem,0,',','.') }}
+                @else
+                    <i class="fas fa-triangle-exclamation"></i> Over Rp {{ number_format(abs($rem),0,',','.') }}
+                @endif
             </div>
         @endif
     </div>

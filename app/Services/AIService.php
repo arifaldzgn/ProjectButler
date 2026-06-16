@@ -58,7 +58,7 @@ class AIService
                 'log_bill_payment', 'log_debt_payment', 'log_sinking_deposit',
                 'log_meal_and_expense', 'transfer_fund',
                 'add_bill', 'add_sinking_fund',
-                'query_balance', 'query_summary', 'query_spending',
+                'query_balance', 'query_summary', 'query_spending', 'query_analytics',
                 'set_reminder', 'unknown',
             ];
 
@@ -128,7 +128,7 @@ PROMPT;
         }
     }
 
-    public function chat(string $message): string
+    public function chat(string $message, array $recentTurns = []): string
     {
         $prompt = <<<PROMPT
 Kamu adalah Butler, asisten pribadi harian yang ramah. Kamu bicara casual dalam Bahasa Indonesia gaul.
@@ -145,6 +145,12 @@ Kalau user kayaknya mau log sesuatu, ingatkan format yang bisa dipakai:
 
 Jangan pernah kasih error teknis. Selalu kasih jalan keluar kalau bingung.
 PROMPT;
+
+        // Recent turns keep casual back-and-forth coherent (U: user, B: Butler).
+        if (!empty($recentTurns)) {
+            $prompt .= "\n\nPercakapan terakhir (buat nyambungin konteks aja):\n"
+                . $this->renderTurns($recentTurns);
+        }
 
         $response = $this->aiClient->generateText($prompt, $message);
         $this->lastTokenUsage = $response['token_usage'] ?? null;
@@ -172,7 +178,7 @@ The user speaks mixed Indonesian/English. Currency abbreviations:
 - "rb" / "ribu" / "k" = × 1,000 IDR  (50rb = 50000)
 - "jt" / "juta" = × 1,000,000 IDR    (2jt = 2000000)
 
-═══ 15 INTENTS ═══
+═══ 16 INTENTS ═══
 
 1. log_expense — user spent money on daily things (no food name mentioned, or food name with NO calorie context needed)
 {
@@ -343,7 +349,25 @@ DIRECTION RULES (decide carefully):
 - source_fund and target_fund MUST be one of the user's known funds/accounts (see USER'S FUNDS list if provided). If a named place is NOT one of them, treat it as external (null), not as a fund.
 Triggers: "transfer 50k pake gopay" (out), "terima 50k ke bca" (in), "transfer 100k ke bca" (internal, source unknown), "pindahkan 2jt dari tabungan ke jajan sebulan" (internal)
 
-15. unknown — can't determine intent clearly
+15. query_analytics — user asks a FILTERED / SCOPED money or calorie question (by merchant, category, count, calories, or a non-"today/month" period). Use this instead of query_spending whenever a merchant, category, count, calorie, or period like "minggu ini"/"kemarin"/"bulan lalu" is involved.
+{
+  "intent": "query_analytics",
+  "confidence": <0.000–1.000>,
+  "metric": "<sum|count|average>",
+  "entry_type": "<expense|income|meal|saving|all>",
+  "category": "<category text if mentioned, else null>",
+  "merchant": "<merchant/keyword if mentioned (e.g. gojek, grab, kopi), else null>",
+  "period": "<today|yesterday|week|month|last_month|all>"
+}
+RULES:
+- "berapa kali ..." / "how many" → metric=count. Otherwise metric=sum (or average if user says "rata-rata").
+- entry_type=expense by default; "income/gaji/pemasukan" → income; food/calorie questions → meal; "nabung/tabungan" → saving.
+- For calorie questions ("berapa kalori minggu ini") set entry_type=meal, metric=sum (the app sums calories, not amount).
+- Map category words to the user's known categories when possible (see USER CUSTOM CATEGORIES). "jajan/makan" usually → food_drink.
+- merchant is a free keyword matched loosely (gojek, grab, tokopedia…). Leave null if none stated.
+Triggers: "total gojek bulan ini", "berapa kali grab minggu ini", "pengeluaran makan minggu ini", "income bulan lalu", "rata-rata jajan per hari"
+
+16. unknown — can't determine intent clearly
 {
   "intent": "unknown",
   "confidence": <0.000–0.499>,
@@ -437,6 +461,18 @@ es jeruk: 90 | bubble tea: 350 | gorengan 1 pcs: 150
 "tampilkan semua uang saya"
 → {"intent":"query_balance","confidence":0.95,"query_target":"total_savings","fund_name":null}
 
+"total gojek bulan ini"
+→ {"intent":"query_analytics","confidence":0.95,"metric":"sum","entry_type":"expense","category":null,"merchant":"gojek","period":"month"}
+
+"berapa kali grab minggu ini"
+→ {"intent":"query_analytics","confidence":0.95,"metric":"count","entry_type":"expense","category":null,"merchant":"grab","period":"week"}
+
+"pengeluaran makan minggu ini"
+→ {"intent":"query_analytics","confidence":0.93,"metric":"sum","entry_type":"expense","category":"food_drink","merchant":null,"period":"week"}
+
+"income bulan lalu berapa"
+→ {"intent":"query_analytics","confidence":0.94,"metric":"sum","entry_type":"income","category":null,"merchant":null,"period":"last_month"}
+
 ═══ CONFIDENCE CALIBRATION ═══
 - 0.95–1.00: User explicitly states intent AND all fields are clear. E.g. "tambahkan 1000kcal", "grab 23rb", "gajian 5jt".
 - 0.85–0.94: Intent is clear but some fields are estimated. E.g. "makan nasi goreng 35k" (calories estimated).
@@ -495,7 +531,36 @@ PROMPT;
                 . "Food mentions are log_meal even if a price appears (ignore the price).";
         }
 
+        // ── Recent conversation (reference resolution ONLY) ─────────────────
+        // Subordinate to the current message: history is for resolving pronouns
+        // and short follow-ups ("yang tadi", "iya"), never a source of new logs.
+        if (!empty($userContext['recent_turns'])) {
+            $prompt .= "\n\n═══ RECENT CONVERSATION (context only) ═══\n"
+                . "Use ONLY to resolve references/follow-ups in the CURRENT message "
+                . "(pronouns, \"yang tadi\", short replies like \"iya\"/\"yang kedua\"). "
+                . "ALWAYS extract intent from the CURRENT message, not from history. "
+                . "Do NOT re-log or re-parse past turns. If the current message stands alone, ignore this.\n"
+                . $this->renderTurns($userContext['recent_turns']);
+        }
+
         return $prompt;
+    }
+
+    /**
+     * Render normalized conversation turns into a compact transcript.
+     * Turns: [ ['role' => 'user'|'assistant', 'text' => string], ... ].
+     */
+    private function renderTurns(array $turns): string
+    {
+        $lines = [];
+        foreach ($turns as $turn) {
+            $role = ($turn['role'] ?? 'user') === 'assistant' ? 'B' : 'U';
+            $text = trim((string) ($turn['text'] ?? ''));
+            if ($text !== '') {
+                $lines[] = "{$role}: {$text}";
+            }
+        }
+        return implode("\n", $lines);
     }
 
     private function buildSummaryPrompt(): string

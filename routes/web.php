@@ -65,7 +65,7 @@ Route::middleware('dashboard.session')->group(function () {
     Route::patch('/dashboard/categories/{category}', [CategoryController::class, 'update'])->name('dashboard.categories.update');
     Route::delete('/dashboard/categories/{category}', [CategoryController::class, 'destroy'])->name('dashboard.categories.destroy');
 
-    // Finance Review ("Sanggup Ga?")
+    // Finance Review
     Route::prefix('dashboard/finance-review')->name('finance-review.')->group(function () {
         Route::get('/',             [\App\Http\Controllers\FinanceReviewController::class, 'show'])->name('index');
         Route::get('/step/{step}',  [\App\Http\Controllers\FinanceReviewController::class, 'step'])->name('step')->whereNumber('step');

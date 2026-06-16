@@ -4,6 +4,92 @@ Format: `[version] YYYY-MM-DD — what changed and why`
 
 ---
 
+## [v2.6.5] 2026-06-14 — Inline entry editing (type the number to fix the last log)
+
+### Added
+
+**Correct the just-logged entry by typing the value — no button tap**
+- After a log, a short numeric reply edits it in place instead of becoming a new log. Butler arms an `edit_ctx:{chatId}` context (meal_id + expense_id, TTL `calorie_edit_window_minutes`, default 15) after the dual-log, auto-confirm, and confirm-callback paths.
+- **Calories** — after a meal with an *estimated* figure ("makan nasgor di gojek 30k" → ~400 kcal), reply `500cal` / `500 kalori` / `jadi 500` / a bare `500` to overwrite it; the meal is marked user-confirmed (`is_calorie_estimated=false`) and `food_calories` behavioral memory is taught.
+- **Amount** — reply with an explicit money unit (`600k`, `2jt`, `600 rb`) to correct an expense's amount. The source fund balance is kept consistent by debiting/crediting only the delta (`applyAmountCorrection()` via `FundService`).
+- **Ambiguity → ask (confidence steers).** After a dual log ("makan hotpot 500k gopay" = meal + 500k expense), a **bare** "600" could mean 600 kcal *or* change 500k→600k. Butler no longer guesses — it asks with an inline keyboard `[🔥 600 kalori] [💸 Ubah jadi Rp 600.000]` (`editpick:` callback → `handleEditPickCallback()`). The amount button scales the bare number to the original's magnitude (`scaleBareToAmount()`), and the label shows the concrete value so the tap is unambiguous.
+- New helpers in `MessageRouter`: `parseCalorieValue()`, `parseEditMoney()`, `scaleBareToAmount()`, `applyCalorieCorrection()`, `applyAmountCorrection()`, `askEditDisambiguation()`, `armEditContext()`, `handleEditPickCallback()`.
+
+**Decision matrix** (reply right after a log, evaluated at Gate 2a before the AI parser):
+| Reply | Meal only | Expense only | Dual (both) |
+|---|---|---|---|
+| `600cal` / `600 kalori` | edit calories | — (falls through) | edit calories |
+| `600k` / `2jt` | — | edit amount | edit amount |
+| bare `600` | edit calories | falls through | **ask** cal vs amount |
+| `grab 25rb`, `ayam goreng` | falls through | falls through | falls through |
+
+### Fixed
+
+**The `[🔢 Edit Kalori]` button flow was querying a non-existent column**
+- `handleCalorieEditCallback()` and the old correction handler filtered `->where('status', 'confirmed')`, but `entries` has no `status` column (confirmation is tracked via `confirmed_at`). The button flow would error on the missing column. Both now use the `confirmed()` scope. (Latent since the v2.5 button feature shipped.)
+
+### Config
+- `config/butler.php` — `calorie_edit_window_minutes` (`BUTLER_CALORIE_EDIT_WINDOW_MINUTES`, default 15): how long the inline-edit context stays active after a log.
+
+### Why
+Calorie figures are AI estimates and amounts get fat-fingered, so correcting the last entry must be frictionless — a one-second reply, not a button → prompt → number dance. The intercept is carefully scoped so money amounts and new logs are never hijacked, and the one genuinely ambiguous case (a bare number after a dual log) is resolved by asking rather than guessing.
+
+### Tests
+- `tests/Unit/CalorieCorrectionParseTest.php` — 33 cases: calorie recognition (500/500cal/jadi 600cal), explicit-money parsing (600k/2jt/1,5 juta → IDR), bare-number magnitude scaling (600 after 500k → 600.000), and rejection of money amounts / meal names. No DB/network.
+
+---
+
+## [v2.6.4] 2026-06-14 — Natural-language analytical queries
+
+### Added
+
+**Filtered, scoped money/calorie questions (`query_analytics`)**
+- Butler previously answered only coarse totals (`query_spending` → today/month). Now it handles questions filtered by merchant, category, count, calories, or a non-standard period: "total gojek bulan ini", "berapa kali grab minggu ini", "pengeluaran makan minggu ini", "income bulan lalu", "rata-rata jajan per hari".
+- **Parser** (`AIService`): new 16th intent `query_analytics` with `metric` (sum|count|average), `entry_type` (expense|income|meal|saving|all), `category`, `merchant`, and `period` (today|yesterday|week|month|last_month|all). Added to the `$validIntents` whitelist (without it the parser's own output would be coerced to `unknown` — the same dead-path bug class fixed for transfers in v2.6.1), header bumped 15→16 INTENTS, `unknown` renumbered to #16, plus four few-shot examples. The parser already receives the user's category names, so "jajan/makan" maps to a real category.
+- **Aggregation** (`EntryService::analyticsQuery()`): read-only, built on existing scopes (`forUser`/`confirmed` + type filter) with a `periodRange()` helper (user-timezone date windows) and loose `LIKE` matching on merchant (merchant/note/food_item) and category. Sums `amount` — or `calories` for meal questions — or counts, or a per-day average. All inputs whitelisted, Eloquent bindings only (no raw SQL injection surface).
+- **Router** (`MessageRouter`): `query_analytics` match arm → `handleAnalyticsQuery()`.
+- **Telegram** (`TelegramService::formatAnalyticsResponse()`): direction/metric-aware copy, e.g. "💸 Total *gojek* bulan ini: *Rp 420.000* (8 transaksi)", "💸 *grab* minggu ini: *5x*", calorie and empty-result variants.
+
+### Notes / limitations
+- Merchant match is substring `LIKE` (good for "gojek/grab", not fuzzy).
+- "week" = the last 7 days ending today (intuitive), not ISO Mon–Sun.
+
+### Why
+This is the highest perceived-intelligence upgrade per unit of effort: it turns Butler from "logs and totals" into something you can actually interrogate ("how much on Gojek this month?"), entirely deterministically over the user's own confirmed data. It also pairs with v2.6.3 conversational memory for natural follow-ups ("…dan bulan lalu?").
+
+### Tests
+- `tests/Unit/AnalyticsQueryTest.php` — 7 pure tests: period-range boundaries (today/week/last_month) and the formatter contract (sum/count/empty/calorie). No DB/network.
+
+---
+
+## [v2.6.3] 2026-06-14 — Conversational short-term memory
+
+### Added
+
+**Butler now remembers recent turns (was stateless / single-message)**
+- `ConversationService` and its `getRecentHistory()` existed since the v2 architecture work but were never wired into the pipeline — every message was parsed in isolation. Now a short, recent-turns window feeds the AI parser and the casual-chat fallback so Butler can resolve follow-ups and references ("yang tadi gojek", one-word replies like "iya"/"yang kedua", pronouns).
+- **Telegram assistant turns are now recorded.** `ProcessTelegramMessage` previously recorded Butler's reply only for the Shortcut channel; the Telegram branch now does too (via `TelegramService::getLastSentText()`), so the model can see its own prior reply (e.g. it asked "🤔 Maksudmu …?" and the user answered "iya"). Best-effort — a logging failure never breaks the response path.
+- `MessageRouter::buildParserContext()` assembles a normalized `recent_turns` window (`buildRecentTurns()` + `sanitizeTurnText()`): channel tags (`__shortcut:` / `__photo:`) stripped, AI debug footers removed, each turn truncated to 150 chars, capped to the last N turns within a time window. Merged into the existing `$userContext` array, so no parser signature change.
+- `AIService::buildParserPrompt()` renders a **RECENT CONVERSATION (context only)** block, deliberately framed as subordinate: "ALWAYS extract intent from the CURRENT message, not from history; do NOT re-log past turns." `AIService::chat()` gained an optional `$recentTurns` param for coherent casual back-and-forth.
+- `ConversationService::getRecentHistory()` gained an optional `$sinceMinutes` filter so stale threads don't bleed into a fresh message.
+
+### Config
+- `config/butler.php` — three new keys (env-overridable):
+  - `conversation_context_enabled` (`BUTLER_CONVERSATION_CONTEXT`, default `true`) — **deploy-free kill-switch**; set false to instantly revert to single-turn parsing.
+  - `conversation_window_minutes` (default `30`), `conversation_turns` (default `6`).
+
+### Notes / limitations
+- History is keyed on the Telegram thread (`channel='telegram'`, `channelId=chatId`). Shortcut-originated calls (routed with the same chatId) read that user's Telegram thread context — acceptable for v1; full per-channel threading is a follow-up.
+- The current user turn is persisted async on the `low` queue, but the current message is passed to the parser directly and prior turns are already stored, so rapid double-sends at worst miss one turn of context (no correctness impact).
+
+### Why
+This is the foundational "feels smart" upgrade: with no extra AI calls, Butler stops treating each message as a clean slate. It can finish a clarification it started ("Berapa ongkosnya?" → "25k"), resolve "yang tadi", and hold a coherent casual thread. Framing + caps + the kill-switch keep the tuned deterministic parser safe. Planned next upgrades (NL analytical queries, proactive intelligence) build on this context.
+
+### Tests
+- `tests/Unit/ConversationContextTest.php` — 6 pure tests locking the prompt-block contract and turn sanitization (no DB/network).
+
+---
+
 ## [v2.6.2] 2026-06-14 — Discoverable help: "what can Butler do?" everywhere
 
 ### Added
@@ -75,7 +161,7 @@ Receipt scanning and fund transfers were both shipped but non-functional — sil
 
 ---
 
-## [v2.6.0] 2026-06-12 — "Sanggup Ga?" Finance Review Wizard
+## [v2.6.0] 2026-06-12 — Finance Review Wizard
 
 ### Added
 
@@ -100,7 +186,7 @@ Receipt scanning and fund transfers were both shipped but non-functional — sil
   - Step 5: Tagihan & Langganan — auto-filled toggle list from `bills` + `recurring_entries`; reactive total.
   - Step 6: Tanggungan & Gaya Hidup — tanggungan count tiles, kiriman keluarga, rokok, gym, asuransi, mudik (all optional).
   - Step 7: Cicilan & Hutang — auto-filled toggle list from `debts`; empty-state with link to Debt Manager.
-- `result.blade.php` — full "Sanggup Ga?" result page with 9 sections:
+- `result.blade.php` — full Finance Review result page with 9 sections:
   1. Hero card: sisa dana/bulan, spending bar, UMK comparison, Gaji vs UMK %.
   2. Tangga Finansial: accordion ladder (5 levels), active level expanded with fokus, target, 3 langkah konkret.
   3. Insight AI — AI narrative with "Perbarui Analisis" button + last-generated timestamp.
@@ -123,7 +209,7 @@ Receipt scanning and fund transfers were both shipped but non-functional — sil
 | `2026_06_12_100001_create_finance_review_profiles_table` | finance_review_profiles — all review fields, progress tracking, AI insights cache |
 
 ### Why
-Users had daily transaction tracking but no way to see their complete monthly cost picture in one place. "Sanggup Ga?" gives a structured self-assessment: auto-fills known data (bills, debts, recurring), collects missing dimensions (housing, food habits, lifestyle), and produces a city-contextual financial health review with AI narrative, interactive what-if simulations, and actionable education — all without requiring a financial advisor.
+Users had daily transaction tracking but no way to see their complete monthly cost picture in one place. The Finance Review gives a structured self-assessment: auto-fills known data (bills, debts, recurring), collects missing dimensions (housing, food habits, lifestyle), and produces a city-contextual financial health review with AI narrative, interactive what-if simulations, and actionable education — all without requiring a financial advisor.
 
 ---
 

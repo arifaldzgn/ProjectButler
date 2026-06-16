@@ -721,6 +721,53 @@ class TelegramService
     }
 
     /**
+     * Format a filtered analytics-query answer (v2.6.4).
+     * Renders the result array from EntryService::analyticsQuery().
+     */
+    public function formatAnalyticsResponse(array $r): string
+    {
+        $period   = $r['period_label'] ?? '';
+        $count    = (int) ($r['count'] ?? 0);
+        $value    = (int) ($r['value'] ?? 0);
+        $metric   = $r['metric'] ?? 'sum';
+
+        // What was being measured, for a human-readable subject line.
+        $subject = $r['merchant']
+            ?: ($r['category']
+                ?: match ($r['entry_type'] ?? 'expense') {
+                    'income' => 'pemasukan',
+                    'meal'   => 'makan',
+                    'saving' => 'tabungan',
+                    default  => 'pengeluaran',
+                });
+        $icon = match ($r['entry_type'] ?? 'expense') {
+            'income' => '💰', 'meal' => '🍽️', 'saving' => '🐷', default => '💸',
+        };
+
+        if ($count === 0) {
+            return "{$icon} Nggak ada catatan *{$subject}* {$period}.";
+        }
+
+        // Count metric → "berapa kali"
+        if ($metric === 'count') {
+            return "{$icon} *{$subject}* {$period}: *{$count}x*.";
+        }
+
+        // Calorie sum/average
+        if (!empty($r['is_calorie'])) {
+            $kcal = number_format($value, 0, ',', '.');
+            $lead = $metric === 'average' ? 'Rata-rata kalori per hari' : 'Total kalori';
+            return "🍽️ {$lead} {$period}: *{$kcal} kcal* ({$count} makan).";
+        }
+
+        // Money sum/average
+        $amount = number_format($value, 0, ',', '.');
+        $lead   = $metric === 'average' ? "Rata-rata *{$subject}* per hari" : "Total *{$subject}*";
+        $tail   = $metric === 'average' ? '' : " ({$count} transaksi)";
+        return "{$icon} {$lead} {$period}: *Rp {$amount}*{$tail}.";
+    }
+
+    /**
      * Format calories today query response.
      */
     public function formatCaloriesTodayResponse(int $total, ?int $calorieGoal = null): string

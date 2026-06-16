@@ -32,6 +32,7 @@ class MessageRouter
     private BehavioralMemoryService $memory;
     private CommandSuggestionService $suggester;
     private DevicePairingService $pairing;
+    private ConversationService $conversations;
 
     public function __construct(
         AIService $ai,
@@ -46,21 +47,23 @@ class MessageRouter
         PolicyEngine $policy,
         BehavioralMemoryService $memory,
         CommandSuggestionService $suggester,
-        DevicePairingService $pairing
+        DevicePairingService $pairing,
+        ConversationService $conversations
     ) {
-        $this->ai         = $ai;
-        $this->entries    = $entries;
-        $this->streaks    = $streaks;
-        $this->aiLog      = $aiLog;
-        $this->onboarding = $onboarding;
-        $this->telegram   = $telegram;
-        $this->funds      = $funds;
-        $this->bills      = $bills;
-        $this->debts      = $debts;
-        $this->policy     = $policy;
-        $this->memory     = $memory;
-        $this->suggester  = $suggester;
-        $this->pairing    = $pairing;
+        $this->ai            = $ai;
+        $this->entries       = $entries;
+        $this->streaks       = $streaks;
+        $this->aiLog         = $aiLog;
+        $this->onboarding    = $onboarding;
+        $this->telegram      = $telegram;
+        $this->funds         = $funds;
+        $this->bills         = $bills;
+        $this->debts         = $debts;
+        $this->policy        = $policy;
+        $this->memory        = $memory;
+        $this->suggester     = $suggester;
+        $this->pairing       = $pairing;
+        $this->conversations = $conversations;
     }
 
     /**
@@ -121,7 +124,7 @@ class MessageRouter
 
         // Ground the parser in this user's real data: actual fund names,
         // previously-corrected food calories, and active tracking mode.
-        $userContext = $this->buildParserContext($user);
+        $userContext = $this->buildParserContext($user, $chatId);
 
         $startTime = microtime(true);
         try {
@@ -179,10 +182,11 @@ class MessageRouter
             'query_balance' => $this->handleQueryBalance($user, $chatId, $parsed),
             'query_summary' => $this->sendQuickSummary($user, $chatId),
             'query_spending' => $this->handleQuerySpending($user, $chatId, $parsed),
+            'query_analytics' => $this->handleAnalyticsQuery($user, $chatId, $parsed),
             'set_reminder' => $this->handleSetReminder($user, $chatId, $parsed),
             'transfer_fund' => $this->handleTransfer($user, $chatId, $message, $parsed, $confidence),
             'unknown' => $this->handleUnknownIntent($user, $chatId, $message, $parsed, $confidence),
-            default   => $this->telegram->sendMessage($chatId, $this->ai->chat($message)),
+            default   => $this->telegram->sendMessage($chatId, $this->ai->chat($message, $userContext['recent_turns'] ?? [])),
         };
     }
 
@@ -213,6 +217,12 @@ class MessageRouter
         // ── v2.6.1: Transfer account pick (source/target clarification) ──
         if (str_starts_with($data, 'xfer_pick:')) {
             $this->handleTransferPickCallback($user, $chatId, $callbackQueryId, $data, $messageId);
+            return;
+        }
+
+        // ── v2.6.5: Inline edit disambiguation (calories vs amount) ──────
+        if (str_starts_with($data, 'editpick:')) {
+            $this->handleEditPickCallback($user, $chatId, $callbackQueryId, $data, $messageId);
             return;
         }
 
@@ -526,6 +536,8 @@ class MessageRouter
     private function handleDualLog(User $user, string $chatId, string $rawMessage, array $parsed, float $confidence): void
     {
         $responses = [];
+        $mealEntry = null;
+        $expenseEntry = null;
 
         // Log meal side (if calorie mode)
         if ($user->isCalorieMode() && !empty($parsed['food_item'])) {
@@ -542,7 +554,9 @@ class MessageRouter
             $totalCal = $this->entries->getTodayCalories($user);
             $calGoal  = $user->daily_calorie_goal;
             $calStr   = $calGoal ? "{$totalCal}/{$calGoal} kcal" : "{$totalCal} kcal";
-            $responses[] = "🍽️ *{$mealParsed['food_item']}* — " . ($mealParsed['calories'] ?? '?') . " kcal dicatat.\n🔥 Total hari ini: {$calStr}";
+            $estimated = (bool) ($mealParsed['is_calorie_estimated'] ?? true);
+            $hint = $estimated ? "\n_(estimasi — ketik mis. `500 kal` kalau mau ganti)_" : '';
+            $responses[] = "🍽️ *{$mealParsed['food_item']}* — " . ($mealParsed['calories'] ?? '?') . " kcal dicatat.\n🔥 Total hari ini: {$calStr}{$hint}";
         }
 
         // Log expense side (if finance mode and amount present)
@@ -582,6 +596,14 @@ class MessageRouter
         }
 
         $this->telegram->sendMessage($chatId, "✅ Dicatat!\n\n" . implode("\n\n", $responses));
+
+        // Arm inline editing for BOTH legs — a following bare "600" is ambiguous
+        // (calories vs amount) and will trigger a disambiguation prompt.
+        $this->armEditContext(
+            $user, $chatId,
+            $mealEntry?->fresh(),
+            $expenseEntry?->fresh(),
+        );
     }
 
     /**
@@ -701,6 +723,13 @@ class MessageRouter
 
         // Dispatch behavioral memory update (queue: low)
         UpdateBehavioralMemory::dispatch($entry->id, $chatId)->onQueue('low');
+
+        // Arm inline editing (calorie for meals, amount for expenses).
+        $this->armEditContext(
+            $user, $chatId,
+            $entry->type === 'meal' ? $entry : null,
+            $entry->type === 'expense' ? $entry : null,
+        );
 
         $this->telegram->answerCallbackQuery($callbackQueryId, 'Dicatat.');
     }
@@ -1095,6 +1124,24 @@ class MessageRouter
                 $this->telegram->formatSpendingTodayResponse($total, $remaining)
             );
         }
+    }
+
+    /**
+     * Filtered analytics question — "total gojek bulan ini",
+     * "berapa kali grab minggu ini", "pengeluaran makan minggu ini".
+     * Normalizes the parsed filters and renders the aggregation.
+     */
+    private function handleAnalyticsQuery(User $user, string $chatId, array $parsed): void
+    {
+        $result = $this->entries->analyticsQuery($user, [
+            'metric'     => $parsed['metric']     ?? 'sum',
+            'entry_type' => $parsed['entry_type'] ?? 'expense',
+            'category'   => $parsed['category']   ?? null,
+            'merchant'   => $parsed['merchant']   ?? null,
+            'period'     => $parsed['period']     ?? 'month',
+        ]);
+
+        $this->telegram->sendMessage($chatId, $this->telegram->formatAnalyticsResponse($result));
     }
 
     private function handleSetReminder(User $user, string $chatId, array $parsed): void
@@ -1700,7 +1747,7 @@ class MessageRouter
 
         $entry = Entry::forUser($user->id)
             ->where('type', 'meal')
-            ->where('status', 'confirmed')
+            ->confirmed()
             ->where('created_at', '>=', now()->subMinutes(30))
             ->find($entryId);
 
@@ -1720,58 +1767,293 @@ class MessageRouter
     }
 
     /**
-     * Handle a pending calorie correction — user sends a number after tapping [🔢 Edit Kalori].
-     * Returns true if this message was consumed as a correction (caller should stop).
+     * Intercept an inline edit BEFORE the AI parser, so a short reply right
+     * after a log corrects the just-logged entry instead of becoming a new one.
+     *
+     * Paths (armed via `edit_ctx:{chatId}` holding meal_id + expense_id):
+     *   • Button flow      — user tapped [🔢 Edit Kalori] (key cal_correction).
+     *   • Explicit calorie — "500cal" / "500 kalori"            → edit meal.
+     *   • Explicit amount  — "600k" / "2jt"                     → edit expense.
+     *   • Bare number      — "600": meal-only → calories; both meal+expense
+     *                        armed → ASK (calories vs new amount); else fall through.
+     *
+     * Returns true if the message was consumed (caller stops).
      */
     private function handleCalorieCorrection(User $user, string $chatId, string $message): bool
     {
-        $entryId = Cache::get("cal_correction:{$chatId}");
-        if (!$entryId) {
-            return false;
-        }
+        $buttonId = Cache::get("cal_correction:{$chatId}");
+        $corr     = $this->parseCalorieValue($message);
 
-        // Extract number from input: "350", "350 kcal", "350kcal"
-        $cleaned = trim(preg_replace('/\s*(kcal|kkal|kalori|cal)\s*/i', '', $message));
-
-        if (!is_numeric($cleaned) || (int) $cleaned <= 0) {
-            $this->telegram->sendMessage($chatId, "Kirim angka kalori saja ya, contoh: `350`");
-            return true; // Consumed the message — keep cache alive
-        }
-
-        $newCalories = (int) $cleaned;
-
-        $entry = Entry::forUser($user->id)
-            ->where('type', 'meal')
-            ->where('status', 'confirmed')
-            ->find($entryId);
-
-        if (!$entry) {
+        // ── Button flow: lenient, we're explicitly waiting for a number ──────
+        if ($buttonId) {
+            if ($corr === null) {
+                $this->telegram->sendMessage($chatId, "Kirim angka kalori saja ya, contoh: `350`");
+                return true; // keep waiting
+            }
             Cache::forget("cal_correction:{$chatId}");
-            $this->telegram->sendMessage($chatId, 'Entry tidak ditemukan. Coba log ulang ya!');
+            $entry = Entry::forUser($user->id)->where('type', 'meal')->confirmed()->find($buttonId);
+            if (!$entry) {
+                $this->telegram->sendMessage($chatId, 'Entry tidak ditemukan. Coba log ulang ya!');
+                return true;
+            }
+            $this->applyCalorieCorrection($user, $chatId, $entry, $corr['value']);
             return true;
         }
 
-        $oldCalories = $entry->calories;
+        // ── Inline flow ──────────────────────────────────────────────────────
+        $money = $this->parseEditMoney($message); // explicit "600k"/"2jt" → amount
+
+        if ($corr === null && $money === null) {
+            // Not an edit expression — disarm so a later stray number can't hijack.
+            Cache::forget("edit_ctx:{$chatId}");
+            return false;
+        }
+
+        $ctx    = Cache::get("edit_ctx:{$chatId}");
+        $window = (int) config('butler.calorie_edit_window_minutes', 15);
+
+        $meal = !empty($ctx['meal_id'])
+            ? Entry::forUser($user->id)->where('type', 'meal')->confirmed()->find($ctx['meal_id'])
+            : null;
+        $exp  = !empty($ctx['expense_id'])
+            ? Entry::forUser($user->id)->where('type', 'expense')->confirmed()->find($ctx['expense_id'])
+            : null;
+
+        // ── Explicit money ("600k") → edit the expense amount ────────────────
+        if ($money !== null) {
+            if (!$exp) {
+                return false; // no expense to edit → let it parse as a fresh log
+            }
+            Cache::forget("edit_ctx:{$chatId}");
+            $this->applyAmountCorrection($user, $chatId, $exp, $money);
+            return true;
+        }
+
+        // ── Explicit calorie ("600cal") → edit the meal ──────────────────────
+        if ($corr['explicit']) {
+            $entry = $meal ?: Entry::forUser($user->id)->where('type', 'meal')->confirmed()
+                ->where('created_at', '>=', now()->subMinutes($window))->latest('id')->first();
+            if (!$entry) {
+                Cache::forget("edit_ctx:{$chatId}");
+                return false;
+            }
+            Cache::forget("edit_ctx:{$chatId}");
+            $this->applyCalorieCorrection($user, $chatId, $entry, $corr['value']);
+            return true;
+        }
+
+        // ── Bare number ("600") — ambiguous when a dual log is in context ─────
+        if ($meal && $exp) {
+            // Could be calories OR a new amount. Let confidence steer: ask.
+            $this->askEditDisambiguation($chatId, $meal, $exp, $corr['value']);
+            return true; // keep ctx until the user picks
+        }
+        if ($meal) {
+            Cache::forget("edit_ctx:{$chatId}");
+            $this->applyCalorieCorrection($user, $chatId, $meal, $corr['value']);
+            return true;
+        }
+
+        // Bare number with only an expense (or nothing) armed — don't guess a
+        // money scale silently; let normal parsing handle it.
+        Cache::forget("edit_ctx:{$chatId}");
+        return false;
+    }
+
+    /**
+     * Parse a message that is PURELY an amount with an explicit unit
+     * ("600k", "600 rb", "2jt", "1,5 juta") → integer IDR. Bare numbers return
+     * null (handled by the calorie path / disambiguation).
+     */
+    private function parseEditMoney(string $message): ?int
+    {
+        $m = mb_strtolower(trim($message));
+        if (!preg_match('/^(?:jadi\s+|ganti\s+(?:jadi\s+)?|ubah\s+(?:jadi\s+)?)?(\d+(?:[.,]\d+)?)\s*(k|rb|ribu|jt|juta)$/u', $m, $mm)) {
+            return null;
+        }
+        $num  = (float) str_replace(',', '.', $mm[1]);
+        $mult = match ($mm[2]) {
+            'jt', 'juta' => 1_000_000,
+            default      => 1_000, // k / rb / ribu
+        };
+        $val = (int) round($num * $mult);
+        return $val > 0 ? $val : null;
+    }
+
+    /**
+     * Scale a bare number to a plausible amount in the same magnitude as the
+     * original (so "600" after a "500k" expense reads as Rp 600.000). The
+     * disambiguation button shows the concrete value, so the user confirms it.
+     */
+    private function scaleBareToAmount(int $n, int $original): int
+    {
+        if ($n <= 0) {
+            return $n;
+        }
+        if ($n >= max(1, (int) ($original / 5))) {
+            return $n; // already a full / same-ballpark number
+        }
+        $unit = $original >= 1_000_000 ? 1_000_000 : ($original >= 1_000 ? 1_000 : 1);
+        return $n * $unit;
+    }
+
+    /**
+     * Ask which a bare number meant: calories of the just-logged meal, or a new
+     * amount for the just-logged expense. Buttons encode the exact value.
+     */
+    private function askEditDisambiguation(string $chatId, Entry $meal, Entry $expense, int $n): void
+    {
+        $amount = $this->scaleBareToAmount($n, (int) $expense->amount);
+        $amtF   = number_format($amount, 0, ',', '.');
+        $oldF   = number_format((int) $expense->amount, 0, ',', '.');
+        $food   = $meal->food_item ?: 'makanan';
+
+        $this->telegram->sendMessageWithInlineKeyboard(
+            $chatId,
+            "🤔 *{$n}* itu maksudnya yang mana?\n🍽️ {$food}  ·  💸 Rp {$oldF}",
+            [
+                ['text' => "🔥 {$n} kalori",          'callback_data' => "editpick:cal:{$meal->id}:{$n}"],
+                ['text' => "💸 Ubah jadi Rp {$amtF}", 'callback_data' => "editpick:amt:{$expense->id}:{$amount}"],
+            ]
+        );
+    }
+
+    /**
+     * Resolve the disambiguation choice: editpick:{cal|amt}:{entryId}:{value}.
+     */
+    private function handleEditPickCallback(User $user, string $chatId, string $callbackQueryId, string $data, int $messageId): void
+    {
+        $parts   = explode(':', $data);
+        $which   = $parts[1] ?? '';
+        $entryId = (int) ($parts[2] ?? 0);
+        $value   = (int) ($parts[3] ?? 0);
+
+        $this->telegram->answerCallbackQuery($callbackQueryId);
+        Cache::forget("edit_ctx:{$chatId}");
+
+        if ($which === 'cal') {
+            $entry = Entry::forUser($user->id)->where('type', 'meal')->confirmed()->find($entryId);
+            if (!$entry) {
+                $this->telegram->editMessage($chatId, $messageId, 'Entry tidak ditemukan.');
+                return;
+            }
+            $this->telegram->editMessage($chatId, $messageId, "🔥 Oke, {$value} kalori.");
+            $this->applyCalorieCorrection($user, $chatId, $entry, $value);
+            return;
+        }
+
+        if ($which === 'amt') {
+            $entry = Entry::forUser($user->id)->where('type', 'expense')->confirmed()->find($entryId);
+            if (!$entry) {
+                $this->telegram->editMessage($chatId, $messageId, 'Entry tidak ditemukan.');
+                return;
+            }
+            $amtF = number_format($value, 0, ',', '.');
+            $this->telegram->editMessage($chatId, $messageId, "💸 Oke, ubah nominal jadi Rp {$amtF}.");
+            $this->applyAmountCorrection($user, $chatId, $entry, $value);
+            return;
+        }
+    }
+
+    /**
+     * Parse a message that is PURELY a calorie value into [value, explicit].
+     * Matches "500", "500cal", "500 kalori", "jadi 500 kkal", "ganti 350".
+     * Returns null when it isn't a bare calorie expression (e.g. "30k", "grab 25rb").
+     */
+    private function parseCalorieValue(string $message): ?array
+    {
+        $m = mb_strtolower(trim($message));
+        // optional verb prefix, a number, optional calorie unit, nothing else.
+        if (!preg_match('/^(?:jadi\s+|ganti\s+(?:jadi\s+)?|ubah\s+(?:jadi\s+)?)?(\d{1,5})\s*(cal|kal|kkal|kcal|kalori|kalorinya)?$/u', $m, $mm)) {
+            return null;
+        }
+        $value = (int) $mm[1];
+        if ($value <= 0) {
+            return null;
+        }
+        return ['value' => $value, 'explicit' => !empty($mm[2])];
+    }
+
+    /**
+     * Apply a calorie correction to a meal entry: update the value, mark it
+     * user-confirmed (not estimated), teach behavioral memory, and reply.
+     */
+    private function applyCalorieCorrection(User $user, string $chatId, Entry $entry, int $newCalories): void
+    {
+        $oldCalories = (int) $entry->calories;
         $entry->update(['calories' => $newCalories, 'is_calorie_estimated' => false]);
 
-        // Update behavioral memory for this food item
         if ($entry->food_item) {
             $this->memory->observe($user->id, 'food_calories', $entry->food_item, [
                 'calories' => $newCalories,
             ]);
         }
 
-        Cache::forget("cal_correction:{$chatId}");
-
         $totalCal = $this->entries->getTodayCalories($user);
-        $goalStr = $user->daily_calorie_goal ? "/{$user->daily_calorie_goal}" : '';
+        $goalStr  = $user->daily_calorie_goal ? "/{$user->daily_calorie_goal}" : '';
+        $food     = $entry->food_item ?: 'makanan';
+        $delta    = $oldCalories > 0 ? "{$oldCalories} → " : '';
 
         $this->telegram->sendMessage(
             $chatId,
-            "✅ Kalori *{$entry->food_item}* diupdate: {$oldCalories} → {$newCalories} kcal\n🔥 Total hari ini: {$totalCal}{$goalStr} kcal"
+            "✅ Kalori *{$food}* diupdate: {$delta}{$newCalories} kcal\n🔥 Total hari ini: {$totalCal}{$goalStr} kcal"
         );
+    }
 
-        return true;
+    /**
+     * Apply an amount correction to a confirmed expense and keep the source
+     * fund balance consistent (debit/credit only the delta).
+     */
+    private function applyAmountCorrection(User $user, string $chatId, Entry $entry, int $newAmount): void
+    {
+        $old = (int) $entry->amount;
+        if ($newAmount === $old) {
+            $this->telegram->sendMessage($chatId, 'Nominalnya sama aja kok 🙂');
+            return;
+        }
+
+        $entry->update(['amount' => $newAmount]);
+
+        if ($entry->source_fund_id) {
+            $fund = \App\Models\Fund::find($entry->source_fund_id);
+            if ($fund) {
+                $delta = $newAmount - $old;
+                if ($delta > 0) {
+                    $this->funds->debitFund($fund, $delta, $entry->id, 'Koreksi nominal');
+                } else {
+                    $this->funds->creditFund($fund, -$delta, $entry->id, 'Koreksi nominal');
+                }
+            }
+        }
+
+        $oldF   = number_format($old, 0, ',', '.');
+        $newF   = number_format($newAmount, 0, ',', '.');
+        $spentF = number_format($this->entries->getTodaySpending($user), 0, ',', '.');
+
+        $this->telegram->sendMessage(
+            $chatId,
+            "✅ Nominal diubah: Rp {$oldF} → *Rp {$newF}*\n💸 Total hari ini: Rp {$spentF}"
+        );
+    }
+
+    /**
+     * Arm the inline-edit context after a log, so the user's next bare/number
+     * reply can correct the just-logged meal's calories and/or the expense's
+     * amount (and trigger disambiguation when a dual log armed both).
+     * Calorie editing is armed only for ESTIMATED meals.
+     */
+    private function armEditContext(User $user, string $chatId, ?Entry $meal, ?Entry $expense): void
+    {
+        $mealId = ($meal && $meal->type === 'meal' && $meal->is_calorie_estimated) ? $meal->id : null;
+        $expId  = ($expense && $expense->type === 'expense') ? $expense->id : null;
+        if (!$mealId && !$expId) {
+            return;
+        }
+        $window = (int) config('butler.calorie_edit_window_minutes', 15);
+        Cache::put("edit_ctx:{$chatId}", [
+            'meal_id'    => $mealId,
+            'expense_id' => $expId,
+        ], now()->addMinutes($window));
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1783,7 +2065,7 @@ class MessageRouter
      * previously-corrected food calories (from behavioral memory), and the
      * active tracking mode. Keeps extraction concrete instead of guessed.
      */
-    private function buildParserContext(User $user): array
+    private function buildParserContext(User $user, string $chatId): array
     {
         $funds = $this->funds->getFundsForUser($user)
             ->pluck('name')
@@ -1814,7 +2096,63 @@ class MessageRouter
             'funds'         => $funds,
             'learned_foods' => $learnedFoods,
             'mode'          => $mode,
+            'recent_turns'  => $this->buildRecentTurns($user, $chatId),
         ];
+    }
+
+    /**
+     * Build a short, normalized window of recent conversation turns for the AI
+     * parser / chat to resolve follow-ups and references. Returns [] when the
+     * feature is disabled, nothing is recent, or the thread is empty.
+     *
+     * Each turn: ['role' => 'user'|'assistant', 'text' => <truncated, de-tagged>].
+     * Note: keyed on the telegram thread (channel='telegram', channelId=chatId).
+     */
+    private function buildRecentTurns(User $user, string $chatId): array
+    {
+        if (!config('butler.conversation_context_enabled', true)) {
+            return [];
+        }
+
+        $limit  = (int) config('butler.conversation_turns', 6);
+        $window = (int) config('butler.conversation_window_minutes', 30);
+
+        $history = $this->conversations->getRecentHistory($user, 'telegram', $chatId, $limit, $window);
+
+        $turns = [];
+        foreach ($history as $msg) {
+            $text = $this->sanitizeTurnText((string) $msg->content);
+            if ($text === '') {
+                continue;
+            }
+            $turns[] = [
+                'role' => $msg->role === 'assistant' ? 'assistant' : 'user',
+                'text' => $text,
+            ];
+        }
+        return $turns;
+    }
+
+    /**
+     * Strip channel tags / debug noise and truncate a turn so the context block
+     * stays cheap and never leaks internal markers into the prompt.
+     */
+    private function sanitizeTurnText(string $text): string
+    {
+        // Drop Shortcut tag prefix: "__shortcut:12|..." / "__shortcut:12|intent:x|..."
+        if (str_starts_with($text, '__shortcut:')) {
+            $parts = explode('|', $text);
+            $text  = end($parts);
+        }
+        // Drop receipt-photo marker payloads entirely.
+        if (str_starts_with($text, '__photo:')) {
+            return '';
+        }
+        // Collapse the AI debug footer ("[🤖 Model: ...]") and whitespace.
+        $text = preg_replace('/\[🤖[^\]]*\]/u', '', $text) ?? $text;
+        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+
+        return mb_substr($text, 0, 150);
     }
 
     private function entryToParsedArray(Entry $entry): array
@@ -1950,6 +2288,13 @@ class MessageRouter
 
         // Dispatch behavioral memory update asynchronously
         UpdateBehavioralMemory::dispatch($entry->id, $chatId)->onQueue('low');
+
+        // Arm inline editing (calorie for meals, amount for expenses).
+        $this->armEditContext(
+            $user, $chatId,
+            $entry->type === 'meal' ? $entry : null,
+            $entry->type === 'expense' ? $entry : null,
+        );
     }
 
     // ════════════════════════════════════════════════════════════════════

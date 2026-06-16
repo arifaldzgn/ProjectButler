@@ -1,5 +1,5 @@
 @extends('layouts.dashboard')
-@section('title', 'Sanggup Ga? — Review Keuangan')
+@section('title', 'Finance Review')
 @section('content')
 
 @php
@@ -82,7 +82,7 @@ $aksi = array_slice($aksi, 0, 4);
 
 {{-- Section 0: Export bar --}}
 <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap" class="animate-in">
-    <span style="font-size:12px;color:var(--text-dim);margin-right:4px">Sanggup Ga?</span>
+    <span style="font-size:12px;color:var(--text-dim);margin-right:4px">Finance Review</span>
     <form method="POST" action="{{ route('finance-review.reset') }}" style="display:inline"
           x-data onsubmit="return confirm('Reset semua data review? Kamu harus mengisi ulang dari awal.')">
         @csrf
@@ -504,7 +504,7 @@ $aksi = array_slice($aksi, 0, 4);
 
     <div style="padding:10px 14px;border-radius:var(--radius-sm);background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.25);margin-bottom:16px;font-size:12px;color:var(--text-muted)">
         <i class="fa-solid fa-circle-exclamation" style="color:var(--yellow);margin-right:6px"></i>
-        Informasi ini bersifat edukasi umum, bukan saran finansial. Sanggup Ga? bukan penasihat keuangan tersertifikasi. Untuk keputusan finansial penting, konsultasikan dengan perencana keuangan profesional.
+        Informasi ini bersifat edukasi umum, bukan saran finansial. Platform ini bukan penasihat keuangan tersertifikasi. Untuk keputusan finansial penting, konsultasikan dengan perencana keuangan profesional.
     </div>
 
     @php
@@ -537,7 +537,7 @@ $aksi = array_slice($aksi, 0, 4);
 </div>
 
 <div style="text-align:center;padding:20px 0;font-size:11px;color:var(--text-dim)">
-    &copy; {{ date('Y') }} Sanggup Ga? &middot; Data: BPS Statistik Indonesia 2026 &middot; Kalkulasi deterministik berdasarkan input pengguna
+    &copy; {{ date('Y') }} Project Butler &middot; Data: BPS Statistik Indonesia 2026 &middot; Kalkulasi deterministik berdasarkan input pengguna
 </div>
 
 <script>

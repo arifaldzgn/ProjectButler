@@ -1,7 +1,7 @@
 # Project Butler — Architecture Reference
 
 > Living document. Updated with every architecture revision.
-> Current version: **v2.6.2 (2026-06-14)**
+> Current version: **v2.6.5 (2026-06-14)**
 
 ---
 
@@ -161,7 +161,7 @@ All changes are behavioral / in-memory:
 
 ### v2.6 Additions
 ```
-finance_review_profiles  — one review profile per user ("Sanggup Ga?")
+finance_review_profiles  — one review profile per user
   id, user_id (unique)
 
   -- Step 1: Profil & Pendapatan
@@ -226,7 +226,7 @@ finance_review_profiles  — one review profile per user ("Sanggup Ga?")
 | `GET` | `/dashboard/finance-review` | Redirect to current wizard step or result |
 | `GET` | `/dashboard/finance-review/step/{1-7}` | Show wizard step |
 | `POST` | `/dashboard/finance-review/step/{1-7}` | Save step, advance to next |
-| `GET` | `/dashboard/finance-review/result` | "Sanggup Ga?" result page |
+| `GET` | `/dashboard/finance-review/result` | Finance Review result page |
 | `POST` | `/dashboard/finance-review/recalculate` | Refresh AI insights only |
 | `POST` | `/dashboard/finance-review/reset` | Delete profile, restart wizard |
 
@@ -259,6 +259,87 @@ IntentDetected         → (extensible, no listener yet)
 
 All listeners run async on the `low` queue — they never block the `high` queue
 that handles message routing.
+
+---
+
+## Inline Entry Editing (v2.6.5)
+
+Estimates and fat-fingered amounts must be trivially correctable. After a log, the router
+arms an edit context so the user's next short reply edits the entry in place:
+
+```
+log → armEditContext() → Cache "edit_ctx:{chatId}" = {meal_id, expense_id}  (TTL = calorie_edit_window_minutes)
+
+next message → Gate 2a handleCalorieCorrection()   (before the AI parser)
+  parseEditMoney(msg)   : "600k"|"2jt"|"600 rb"  → IDR        → edit EXPENSE amount
+  parseCalorieValue(msg): "600"|"600cal"|"jadi 600 kalori"     → {value, explicit}
+       explicit cal        → edit MEAL calories
+       bare + meal only    → edit MEAL calories
+       bare + meal+expense → ASK  [🔥 N kalori] [💸 Ubah jadi Rp …]  (editpick: callback)
+       else                → fall through to normal parsing
+
+  applyCalorieCorrection() : update calories, is_calorie_estimated=false, teach food_calories
+  applyAmountCorrection()  : update amount, adjust source fund by the delta (FundService)
+```
+
+The bare-number ambiguity after a dual log is resolved by asking, not guessing
+(`askEditDisambiguation()`); the amount button scales the bare number to the original's
+magnitude (`scaleBareToAmount()`) and shows the concrete value. Because the intercept only
+fires on a pure numeric reply, money amounts ("grab 25rb") and new logs are never hijacked.
+(Also fixed here: the older `[🔢 Edit Kalori]` button queried a non-existent `status`
+column — now uses the `confirmed()` scope.)
+
+---
+
+## Analytical Queries (v2.6.4)
+
+A 16th parser intent, `query_analytics`, answers filtered money/calorie questions
+("total gojek bulan ini", "berapa kali grab minggu ini", "income bulan lalu"):
+
+```
+parse → query_analytics {metric, entry_type, category, merchant, period}
+  → MessageRouter::handleAnalyticsQuery()
+       → EntryService::analyticsQuery(user, filters)     ← read-only, Eloquent bindings
+            scopes: forUser + confirmed + type + whereBetween(entry_time, periodRange())
+            + loose LIKE on merchant/note/food_item and category
+            aggregate: sum(amount) | sum(calories for meals) | count | per-day average
+       → TelegramService::formatAnalyticsResponse()
+```
+
+Distinct from `query_spending` (bare today/month total) — `query_analytics` is selected
+whenever a merchant, category, count, calorie, or non-standard period is involved. All
+inputs are whitelisted; there is no raw-SQL surface. "week" = last 7 days ending today.
+
+---
+
+## Conversational Memory (v2.6.3)
+
+Butler keeps a short-term memory of recent turns so it can resolve follow-ups and
+references instead of parsing each message in isolation. The infra (`ConversationService`,
+`conversations` / `conversation_messages` tables) existed since the v2 work but was dormant;
+it is now wired into the AI path:
+
+```
+ProcessTelegramMessage
+  ├─ records USER turn   (async, low queue, via LogMessageReceived listener)
+  └─ records BUTLER turn (telegram + shortcut) ← getLastSentText()
+
+MessageRouter::handle()
+  └─ buildParserContext(user, chatId)
+       └─ buildRecentTurns() → getRecentHistory(telegram, chatId, N, window)
+            → sanitizeTurnText()  (strip __shortcut:/__photo: tags + debug footer, truncate 150c)
+       └─ recent_turns  ──┐
+                          ├─→ AIService::parseMessage()  → "RECENT CONVERSATION (context only)" block
+                          └─→ AIService::chat()          → casual back-and-forth context
+```
+
+Guardrails: the prompt block is subordinate ("extract intent from the CURRENT message,
+never re-log history"), capped (`conversation_turns`, default 6) and time-bounded
+(`conversation_window_minutes`, default 30), and the whole feature sits behind a
+deploy-free kill-switch `conversation_context_enabled` in `config/butler.php`.
+
+Limitation: history is keyed on the Telegram thread (`telegram` + `chatId`); per-channel
+threading for Shortcut is a follow-up.
 
 ---
 
